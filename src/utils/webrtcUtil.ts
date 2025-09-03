@@ -1,14 +1,17 @@
-import { onDestroy, onMount } from "svelte";
 import { writable, get, type Writable } from "svelte/store";
 import { WebRTCPeer } from "$lib/webrtc";
-import { connected, ws } from "../stores/websocketStore";
-import { room } from "../stores/roomStore";
+import { WebRTCPacketType } from "../types/webrtc";
+import { room, connectionState } from "../stores/roomStore";
+import { ConnectionState } from "../types/websocket";
+import { messages } from "../stores/messageStore";
+import { MessageType, type Message } from "../types/message";
 
 export const error = writable(null);
 export let peer: Writable<WebRTCPeer | null> = writable(null);
-export let messages: Writable<string[]> = writable([]);
 export let isRTCConnected: Writable<boolean> = writable(false);
 export let dataChannelReady: Writable<boolean> = writable(false);
+export let keyExchangeDone: Writable<boolean> = writable(false);
+export let roomKey: Writable<{ key: CryptoKey | null }> = writable({ key: null });
 
 const callbacks = {
     onConnected: () => {
@@ -16,27 +19,40 @@ const callbacks = {
         isRTCConnected.set(true);
     },
     //! TODO: come up with a more complex room system. This is largely for testing purposes
-    onMessage: (message: string | ArrayBuffer) => {
-        console.log("Received message:", message);
-        if (typeof message === 'object' && message instanceof Blob) {
-            // download the file
-            const url = URL.createObjectURL(message);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = message.name;
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => {
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-            }, 100);
-        }
+    onMessage: (message: { type: WebRTCPacketType, data: ArrayBuffer }) => {
+        // onMessage: (message: string | ArrayBuffer) => {
+        console.log("WebRTC Received message:", message);
+        // if (typeof message === 'object' && message instanceof Blob) {
+        //     // download the file
+        //     const url = URL.createObjectURL(message);
+        //     const a = document.createElement('a');
+        //     a.href = url;
+        //     a.download = message.name;
+        //     document.body.appendChild(a);
+        //     a.click();
+        //     setTimeout(() => {
+        //         document.body.removeChild(a);
+        //         window.URL.revokeObjectURL(url);
+        //     }, 100);
+        // }
 
-        messages.set([...get(messages), `Peer: ${message}`]);
+        console.log("Received message:", message);
+
+        // TODO: fixup
+        if (message.type === WebRTCPacketType.MESSAGE) {
+            let textDecoder = new TextDecoder();
+            let json: Message = JSON.parse(textDecoder.decode(message.data));
+            json.initiator = false;
+            messages.set([...get(messages), json]);
+        }
     },
     onDataChannelOpen: () => {
         console.log("Data channel open");
         dataChannelReady.set(true);
+    },
+    onKeyExchangeDone: async () => {
+        console.log("Key exchange done");
+        keyExchangeDone.set(true);
     },
     onNegotiationNeeded: async () => {
         console.log("Negotiation needed");
@@ -44,7 +60,7 @@ const callbacks = {
     },
     onError: (error: any) => {
         console.error("Error:", error);
-        messages.set([...get(messages), `Error: ${error}`]);
+        messages.set([...get(messages), { initiator: false, type: MessageType.ERROR, data: error }]);
     },
 };
 
@@ -54,10 +70,15 @@ export async function handleMessage(event: MessageEvent) {
 
     switch (message.type) {
         case "created":
+            connectionState.set(ConnectionState.CONNECTED);
             console.log("Room created:", message.data);
             room.set(message.data);
             return;
+        case "join":
+            console.log("new client joined room", message.data);
+            return;
         case "joined":
+            connectionState.set(ConnectionState.CONNECTED);
             console.log("Joined room:", message.data);
             return;
         case "error":
@@ -72,6 +93,24 @@ export async function handleMessage(event: MessageEvent) {
                 return;
             }
 
+            try {
+                // let iv = new ArrayBuffer(message.data.roomKey.iv)
+
+                let importedRoomKey = await window.crypto.subtle.importKey(
+                    "jwk",
+                    message.data.roomKey.key,
+                    {
+                        name: "AES-KW",
+                        length: 256,
+                    },
+                    true,
+                    ["wrapKey", "unwrapKey"],
+                )
+                roomKey.set({ key: importedRoomKey });
+            } catch (e) {
+                console.error("Error importing room key:", e);
+                return;
+            }
             peer.set(new WebRTCPeer(
                 roomId,
                 message.data.isInitiator,

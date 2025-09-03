@@ -1,17 +1,20 @@
 <script lang="ts">
     import { ws, connected } from "../stores/websocketStore";
-    import { room } from "../stores/roomStore";
+    import { room, connectionState } from "../stores/roomStore";
     import { browser } from "$app/environment";
     import { peer, handleMessage } from "../utils/webrtcUtil";
     import { onDestroy, onMount } from "svelte";
     import RtcMessage from "../components/RTCMessage.svelte";
+    import { ConnectionState } from "../types/websocket";
 
     onMount(async () => {
+        $connectionState = ConnectionState.CONNECTING;
         $ws.addEventListener("message", handleMessage);
     });
 
     onDestroy(() => {
         if ($ws) {
+            $connectionState = ConnectionState.DISCONNECTED;
             $ws.removeEventListener("message", handleMessage);
         }
         if ($peer) {

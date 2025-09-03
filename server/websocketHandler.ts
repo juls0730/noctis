@@ -1,44 +1,22 @@
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
+import { SocketMessageType, type SocketMessage } from "../src/types/websocket";
 
 // TODO: remove stale rooms somehow
 const rooms = new Map<string, WebSocket[]>();
 
-enum MessageType {
-    // requests
-    CREATE_ROOM = 'create',
-    JOIN_ROOM = 'join',
-
-    // responses
-    ROOM_CREATED = 'created',
-    ROOM_JOINED = 'joined',
-    ROOM_READY = 'ready',
-
-    // webrtc
-    ICE_CANDIDATE = 'ice-candidate',
-    OFFER = 'offer',
-    ANSWER = 'answer',
-
-    ERROR = 'error',
-}
-
-type Message = {
-    type: MessageType;
-    data: any;
-};
-
-function createRoom(socket: WebSocket): string {
+async function createRoom(socket: WebSocket): Promise<string> {
     let roomId = Math.random().toString(36).substring(2, 10);
     rooms.set(roomId, []);
 
-    socket.send(JSON.stringify({ type: MessageType.ROOM_CREATED, data: roomId }));
+    socket.send(JSON.stringify({ type: SocketMessageType.ROOM_CREATED, data: roomId }));
 
-    joinRoom(roomId, socket);
+    await joinRoom(roomId, socket);
 
     return roomId;
 }
 
-function joinRoom(roomId: string, socket: WebSocket) {
+async function joinRoom(roomId: string, socket: WebSocket) {
     let room = rooms.get(roomId);
     console.log(room?.length);
 
@@ -48,13 +26,13 @@ function joinRoom(roomId: string, socket: WebSocket) {
     }
 
     if (room.length == 2) {
-        socket.send(JSON.stringify({ type: MessageType.ERROR, data: 'Room is full' }));
+        socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Room is full' }));
         return;
     }
 
     // notify all clients in the room of the new client, except the client itself
     room.forEach(client => {
-        client.send(JSON.stringify({ type: MessageType.JOIN_ROOM, data: roomId }));
+        client.send(JSON.stringify({ type: SocketMessageType.JOIN_ROOM, data: roomId }));
     });
     room.push(socket);
 
@@ -76,11 +54,23 @@ function joinRoom(roomId: string, socket: WebSocket) {
 
     // TODO: consider letting rooms get larger than 2 clients
     if (room.length == 2) {
-        room.forEach(client => {
+        // A room key used to wrap the clients public keys during key exchange
+        let roomKey = await crypto.subtle.generateKey(
+            {
+                name: "AES-KW",
+                length: 256,
+            },
+            true,
+            ["wrapKey", "unwrapKey"],
+        )
+        let jsonWebKey = await crypto.subtle.exportKey("jwk", roomKey);
+        room.forEach(async client => {
             // announce the room is ready, and tell each peer if they are the initiator
-            client.send(JSON.stringify({ type: MessageType.ROOM_READY, data: { isInitiator: client !== socket } }));
+            client.send(JSON.stringify({ type: SocketMessageType.ROOM_READY, data: { isInitiator: client !== socket, roomKey: { key: jsonWebKey } } }));
         });
     }
+
+    console.log("Room created:", roomId, room.length);
 }
 
 function deleteRoom(roomId: string) {
@@ -90,57 +80,50 @@ function deleteRoom(roomId: string) {
 export function confgiureWebsocketServer(ws: WebSocketServer) {
     ws.on('connection', socket => {
         // Handle messages from the client
-        socket.on('message', event => {
-            let message;
+        socket.on('message', async event => {
+            let message: SocketMessage | undefined = undefined;
 
             if (event instanceof Buffer) { // Assuming JSON is sent as a string
                 try {
-                    const jsonObject = JSON.parse(Buffer.from(event).toString());
-                    // TODO: validate the message
-                    message = jsonObject as Message;
+                    message = JSON.parse(Buffer.from(event).toString());
                 } catch (e) {
                     console.error("Error parsing JSON:", e);
                 }
             }
 
-            if (!message) {
+            if (message === undefined) {
                 console.log("Received non-JSON message:", event);
                 // If the message is not JSON, send an error message
-                socket.send(JSON.stringify({ type: MessageType.ERROR, data: 'Invalid message' }));
+                socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Invalid message' }));
                 return;
             }
 
-            let { type } = message;
-
-            // coerce type to a MessageType enum
-            type = type as MessageType;
-
-            switch (type) {
-                case MessageType.CREATE_ROOM:
+            switch (message.type) {
+                case SocketMessageType.CREATE_ROOM:
                     // else, create a new room
-                    createRoom(socket);
+                    await createRoom(socket);
                     break;
-                case MessageType.JOIN_ROOM:
+                case SocketMessageType.JOIN_ROOM:
                     // if join message has a roomId, join the room
-                    if (!message.data) {
-                        socket.send(JSON.stringify({ type: MessageType.ERROR, data: 'Invalid message' }));
+                    if (!message.roomId) {
+                        socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Invalid message' }));
                         return;
                     }
 
                     // if the user tries to join a room that doesnt exist, send an error message
-                    if (rooms.get(message.data) == undefined) {
-                        socket.send(JSON.stringify({ type: MessageType.ERROR, data: 'Invalid roomId' }));
+                    if (rooms.get(message.roomId) == undefined) {
+                        socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Invalid roomId' }));
                         return;
                     }
 
-                    joinRoom(message.data, socket);
+                    await joinRoom(message.roomId, socket);
 
                     // the client is now in the room and the peer knows about it
-                    socket.send(JSON.stringify({ type: MessageType.ROOM_JOINED, data: null }));
+                    socket.send(JSON.stringify({ type: SocketMessageType.ROOM_JOINED, roomId: message.roomId }));
                     break;
-                case MessageType.OFFER:
-                case MessageType.ANSWER:
-                case MessageType.ICE_CANDIDATE:
+                case SocketMessageType.OFFER:
+                case SocketMessageType.ANSWER:
+                case SocketMessageType.ICE_CANDIDATE:
                     // relay these messages to the other peers in the room
                     const room = rooms.get(message.data.roomId);
 
@@ -153,8 +136,8 @@ export function confgiureWebsocketServer(ws: WebSocketServer) {
                     }
                     break;
                 default:
-                    console.warn(`Unknown message type: ${type}`);
-                    socket.send(JSON.stringify({ type: MessageType.ERROR, data: 'Unknown message type' }));
+                    console.warn(`Unknown message type: ${message.type}`);
+                    socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Unknown message type' }));
                     break;
             }
         });

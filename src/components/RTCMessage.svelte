@@ -1,13 +1,17 @@
 <script lang="ts">
     import { writable, type Writable } from "svelte/store";
-    import { room } from "../stores/roomStore";
+    import { room, connectionState } from "../stores/roomStore";
     import { connected } from "../stores/websocketStore";
     import {
         isRTCConnected,
         dataChannelReady,
-        messages,
         peer,
+        keyExchangeDone,
     } from "../utils/webrtcUtil";
+    import { messages } from "../stores/messageStore";
+    import { WebRTCPacketType } from "../types/webrtc";
+    import { ConnectionState } from "../types/websocket";
+    import { MessageType } from "../types/message";
 
     let inputMessage: Writable<string> = writable("");
     let inputFile = writable(null);
@@ -23,15 +27,31 @@
             return;
         }
 
-        if ($inputFile != null && $inputFile[0] !== undefined) {
-            $messages = [...$messages, `You: ${$inputFile[0].name}`];
-            $peer.send($inputFile[0]);
-            $inputFile = null;
-        }
+        // if ($inputFile != null && $inputFile[0] !== undefined) {
+        //     $messages = [...$messages, `You: ${$inputFile[0].name}`];
+        //     $peer.send($inputFile[0]);
+        //     $inputFile = null;
+        // }
 
         if ($inputMessage) {
-            $messages = [...$messages, `You: ${$inputMessage}`];
-            $peer.send($inputMessage);
+            // $messages = [...$messages, `You: ${$inputMessage}`];
+            $messages = [
+                ...$messages,
+                {
+                    initiator: true,
+                    type: MessageType.TEXT,
+                    data: $inputMessage,
+                },
+            ];
+            $peer.send(
+                new TextEncoder().encode(
+                    JSON.stringify({
+                        type: MessageType.TEXT,
+                        data: $inputMessage,
+                    }),
+                ).buffer,
+                WebRTCPacketType.MESSAGE,
+            );
             $inputMessage = "";
         }
     }
@@ -41,15 +61,35 @@
     }
 </script>
 
-{#if $room !== null && $connected === true}
+<!-- If we are in a room, connected to the websocket server, and the have been informed that we are connected to the room -->
+{#if $room !== null && $connected === true && $connectionState === ConnectionState.CONNECTED}
     {#if !$isRTCConnected}
         <p>Waiting for peer to connect...</p>
     {:else if !$dataChannelReady}
         <p>Establishing data channel...</p>
+    {:else if !$keyExchangeDone}
+        <p>Establishing a secure connection with the peer...</p>
     {:else}
-        <div class="flex-grow overflow-y-auto mb-4 p-2 bg-gray-800 rounded">
+        <div
+            class="flex-grow overflow-y-auto mb-4 p-2 bg-gray-800 rounded break-all"
+        >
             {#each $messages as msg}
-                <p>{msg}</p>
+                <div>
+                    <div class="w-fit h-max">
+                        {#if msg.initiator}
+                            You:
+                        {:else}
+                            Peer:
+                        {/if}
+                    </div>
+                    <span>
+                        {#if msg.type === MessageType.TEXT}
+                            {msg.data}
+                        {:else}
+                            Unknown message type: {msg.type}
+                        {/if}
+                    </span>
+                </div>
             {/each}
         </div>
         <input

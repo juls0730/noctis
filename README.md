@@ -1,38 +1,17 @@
-# sv
+# Wormhole
+(needs a different name I think because I dont want to confuse it with wormhole.app)
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A peer-to-peer encrypted file sharing app.
 
-## Creating a project
+## Features
+- E2E communication
+- P2P file sharing
+- P2P chat
 
-If you're seeing this, you've probably already done this step. Congrats!
+Your data is peer-to-peer encrypted and only accessible to the people you share it with, it never touches any servers.
 
-```sh
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## How to use
+1. clone the repo
+2. run `bun install`
+3. run `bun run dev --host` (webrtc doesnt co-operate with localhost connections, so connect via 127.0.0.1)
+4. open the browser at http://127.0.0.1:5173
