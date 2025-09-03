@@ -1,4 +1,3 @@
-import { json } from "@sveltejs/kit";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
 
@@ -6,14 +5,20 @@ import type { WebSocket } from "ws";
 const rooms = new Map<string, WebSocket[]>();
 
 enum MessageType {
+    // requests
     CREATE_ROOM = 'create',
     JOIN_ROOM = 'join',
+
+    // responses
     ROOM_CREATED = 'created',
     ROOM_JOINED = 'joined',
     ROOM_READY = 'ready',
+
+    // webrtc
     ICE_CANDIDATE = 'ice-candidate',
     OFFER = 'offer',
     ANSWER = 'answer',
+
     ERROR = 'error',
 }
 
@@ -24,17 +29,27 @@ type Message = {
 
 function createRoom(socket: WebSocket): string {
     let roomId = Math.random().toString(36).substring(2, 10);
-    rooms.set(roomId, [socket]);
+    rooms.set(roomId, []);
+
+    socket.send(JSON.stringify({ type: MessageType.ROOM_CREATED, data: roomId }));
+
+    joinRoom(roomId, socket);
 
     return roomId;
 }
 
 function joinRoom(roomId: string, socket: WebSocket) {
-    const room = rooms.get(roomId);
+    let room = rooms.get(roomId);
+    console.log(room?.length);
 
     // should be unreachable
     if (!room) {
         throw new Error(`Room ${roomId} does not exist`);
+    }
+
+    if (room.length == 2) {
+        socket.send(JSON.stringify({ type: MessageType.ERROR, data: 'Room is full' }));
+        return;
     }
 
     // notify all clients in the room of the new client, except the client itself
@@ -43,8 +58,21 @@ function joinRoom(roomId: string, socket: WebSocket) {
     });
     room.push(socket);
 
-    // the client is now in the room and the peer knows about it
-    socket.send(JSON.stringify({ type: MessageType.ROOM_JOINED, data: null }));
+    socket.addEventListener('close', (ev) => {
+        room = rooms.get(roomId)
+        if (!room) {
+            return;
+        }
+
+        // for some reason, when you filter the array when the length is 1 it stays at 1, but we *know* that if its 1
+        // then when this client disconnects, the room should be deleted since the room is empty
+        if (room.length === 1) {
+            deleteRoom(roomId);
+            return;
+        }
+
+        rooms.set(roomId, room.filter(client => client !== ev.target));
+    });
 
     // TODO: consider letting rooms get larger than 2 clients
     if (room.length == 2) {
@@ -63,8 +91,6 @@ export function confgiureWebsocketServer(ws: WebSocketServer) {
     ws.on('connection', socket => {
         // Handle messages from the client
         socket.on('message', event => {
-            console.log(event, typeof event);
-
             let message;
 
             if (event instanceof Buffer) { // Assuming JSON is sent as a string
@@ -92,8 +118,7 @@ export function confgiureWebsocketServer(ws: WebSocketServer) {
             switch (type) {
                 case MessageType.CREATE_ROOM:
                     // else, create a new room
-                    const roomId = createRoom(socket);
-                    socket.send(JSON.stringify({ type: MessageType.ROOM_CREATED, data: roomId }));
+                    createRoom(socket);
                     break;
                 case MessageType.JOIN_ROOM:
                     // if join message has a roomId, join the room
@@ -109,6 +134,9 @@ export function confgiureWebsocketServer(ws: WebSocketServer) {
                     }
 
                     joinRoom(message.data, socket);
+
+                    // the client is now in the room and the peer knows about it
+                    socket.send(JSON.stringify({ type: MessageType.ROOM_JOINED, data: null }));
                     break;
                 case MessageType.OFFER:
                 case MessageType.ANSWER:
@@ -129,11 +157,6 @@ export function confgiureWebsocketServer(ws: WebSocketServer) {
                     socket.send(JSON.stringify({ type: MessageType.ERROR, data: 'Unknown message type' }));
                     break;
             }
-        });
-
-        // Handle client disconnection
-        socket.on('close', () => {
-            // TODO: if this client was in a room, remove them from the room
         });
     });
 }

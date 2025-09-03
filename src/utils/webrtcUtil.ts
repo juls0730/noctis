@@ -15,8 +15,23 @@ const callbacks = {
         console.log("Connected to peer");
         isRTCConnected.set(true);
     },
+    //! TODO: come up with a more complex room system. This is largely for testing purposes
     onMessage: (message: string | ArrayBuffer) => {
         console.log("Received message:", message);
+        if (typeof message === 'object' && message instanceof Blob) {
+            // download the file
+            const url = URL.createObjectURL(message);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = message.name;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            }, 100);
+        }
+
         messages.set([...get(messages), `Peer: ${message}`]);
     },
     onDataChannelOpen: () => {
@@ -67,8 +82,6 @@ export async function handleMessage(event: MessageEvent) {
                 await get(peer)?.createOffer();
             }
             return;
-        default:
-            console.warn(`Unknown message type: ${message.type}`);
     }
 
     if (!get(peer)) {
