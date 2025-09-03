@@ -1,0 +1,9 @@
+@import 'tailwindcss';
+
+body, html {
+    @apply bg-neutral-950 text-white font-sans min-h-screen;
+}
+
+a {
+    @apply text-pink-600 underline hover:no-underline;
+}
