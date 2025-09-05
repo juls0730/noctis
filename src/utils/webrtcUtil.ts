@@ -1,17 +1,17 @@
 import { writable, get, type Writable } from "svelte/store";
 import { WebRTCPeer } from "$lib/webrtc";
 import { WebRTCPacketType } from "../types/webrtc";
-import { room, connectionState } from "../stores/roomStore";
+import { room } from "../stores/roomStore";
 import { ConnectionState } from "../types/websocket";
 import { messages } from "../stores/messageStore";
 import { MessageType, type Message } from "../types/message";
+import { WebSocketMessageType, type WebSocketMessage } from "../stores/websocketStore";
 
-export const error = writable(null);
+export const error: Writable<string | null> = writable(null);
 export let peer: Writable<WebRTCPeer | null> = writable(null);
 export let isRTCConnected: Writable<boolean> = writable(false);
 export let dataChannelReady: Writable<boolean> = writable(false);
 export let keyExchangeDone: Writable<boolean> = writable(false);
-export let roomKey: Writable<{ key: CryptoKey | null }> = writable({ key: null });
 
 const callbacks = {
     onConnected: () => {
@@ -64,53 +64,36 @@ const callbacks = {
     },
 };
 
+
+
 export async function handleMessage(event: MessageEvent) {
-    console.log("Message received:", event.data);
-    const message = JSON.parse(event.data);
+    console.log("Message received:", event.data, typeof event.data);
+    const message: WebSocketMessage = JSON.parse(event.data);
 
     switch (message.type) {
-        case "created":
-            connectionState.set(ConnectionState.CONNECTED);
+        case WebSocketMessageType.ROOM_CREATED:
             console.log("Room created:", message.data);
-            room.set(message.data);
+            room.update((room) => ({ ...room, id: message.data, connectionState: ConnectionState.CONNECTED }));
             return;
-        case "join":
-            console.log("new client joined room", message.data);
+        case WebSocketMessageType.JOIN_ROOM:
+            console.log("new client joined room");
             return;
-        case "joined":
-            connectionState.set(ConnectionState.CONNECTED);
-            console.log("Joined room:", message.data);
+        case WebSocketMessageType.ROOM_JOINED:
+            room.update((room) => ({ ...room, connectionState: ConnectionState.CONNECTED }));
+            console.log("Joined room");
             return;
-        case "error":
+        case WebSocketMessageType.ERROR:
             console.error("Error:", message.data);
             error.set(message.data);
             return;
-        case "ready":
-            const roomId = get(room);
+        case WebSocketMessageType.ROOM_READY:
+            let roomId = get(room).id;
 
-            if (!roomId) {
+            if (roomId === null) {
                 console.error("Room not set");
                 return;
             }
 
-            try {
-                // let iv = new ArrayBuffer(message.data.roomKey.iv)
-
-                let importedRoomKey = await window.crypto.subtle.importKey(
-                    "jwk",
-                    message.data.roomKey.key,
-                    {
-                        name: "AES-KW",
-                        length: 256,
-                    },
-                    true,
-                    ["wrapKey", "unwrapKey"],
-                )
-                roomKey.set({ key: importedRoomKey });
-            } catch (e) {
-                console.error("Error importing room key:", e);
-                return;
-            }
             peer.set(new WebRTCPeer(
                 roomId,
                 message.data.isInitiator,
@@ -129,26 +112,26 @@ export async function handleMessage(event: MessageEvent) {
     }
 
     switch (message.type) {
-        case "offer":
+        case WebSocketMessageType.WEBRTC_OFFER:
             console.log("Received offer");
             await get(peer)?.setRemoteDescription(
                 new RTCSessionDescription(message.data.sdp),
             );
             await get(peer)?.createAnswer();
             return;
-        case "answer":
+        case WebSocketMessageType.WERTC_ANSWER:
             console.log("Received answer");
             await get(peer)?.setRemoteDescription(
                 new RTCSessionDescription(message.data.sdp),
             );
             return;
-        case "ice-candidate":
+        case WebSocketMessageType.WEBRTC_ICE_CANDIDATE:
             console.log("Received ICE candidate");
             await get(peer)?.addIceCandidate(message.data.candidate);
             return;
         default:
             console.warn(
-                `Unknown message type: ${message.type} from ${get(room)}`,
+                `Unknown message type: ${message.type} from ${get(room).id}`,
             );
     }
 }

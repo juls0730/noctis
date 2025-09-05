@@ -1,7 +1,7 @@
 import { get } from 'svelte/store';
-import { ws } from '../stores/websocketStore';
-import { roomKey } from '../utils/webrtcUtil';
+import { WebSocketMessageType, ws } from '../stores/websocketStore';
 import { WebRTCPacketType, type KeyStore, type WebRTCPeerCallbacks } from '../types/webrtc';
+import { clientKeyConfig } from '../shared/keyConfig';
 
 export class WebRTCPeer {
     private peer: RTCPeerConnection | null = null;
@@ -28,13 +28,13 @@ export class WebRTCPeer {
     }
 
     private sendIceCandidate(candidate: RTCIceCandidate) {
-        get(ws).send(JSON.stringify({
-            type: 'ice-candidate',
+        get(ws).send({
+            type: WebSocketMessageType.WEBRTC_ICE_CANDIDATE,
             data: {
                 roomId: this.roomId,
                 candidate: candidate,
             },
-        }))
+        })
     }
 
     public async initialize() {
@@ -98,7 +98,6 @@ export class WebRTCPeer {
 
         channel.onmessage = async (event: MessageEvent<ArrayBuffer>) => {
             console.log('data channel message:', event.data);
-
             // event is binary data, we need to parse it, convert it into a WebRTCMessage, and then decrypt it if
             // necessary
             let data = new Uint8Array(event.data);
@@ -116,32 +115,17 @@ export class WebRTCPeer {
 
                 console.log("Received key exchange", data.buffer);
 
-                // let textDecoder = new TextDecoder();
-                // let dataString = textDecoder.decode(data.buffer);
+                const textDecoder = new TextDecoder();
+                const jsonKey = JSON.parse(textDecoder.decode(data));
 
-                // console.log("Received key exchange", dataString);
+                console.log("Received key exchange", jsonKey);
 
-                // let json = JSON.parse(dataString);
-
-                let unwrappingKey = get(roomKey);
-                if (!unwrappingKey.key) throw new Error("Room key not set");
-
-                this.keys.peersPublicKey = await window.crypto.subtle.unwrapKey(
+                this.keys.peersPublicKey = await window.crypto.subtle.importKey(
                     "jwk",
-                    data,
-                    unwrappingKey.key,
-                    {
-                        name: "AES-KW",
-                        length: 256,
-                    },
-                    {
-                        name: "RSA-OAEP",
-                        modulusLength: 4096,
-                        publicExponent: new Uint8Array([1, 0, 1]),
-                        hash: "SHA-256",
-                    },
+                    jsonKey,
+                    clientKeyConfig,
                     true,
-                    ["encrypt"],
+                    ["wrapKey"],
                 );
 
                 // if our keys are not generated, start the reponding side of the key exchange
@@ -155,7 +139,32 @@ export class WebRTCPeer {
             }
 
             if (encrypted) {
-                data = new Uint8Array(await this.decrypt(data.buffer));
+                if (!this.keys.localKeys) {
+                    throw new Error("Local keypair not generated");
+                }
+
+                // start at 0 since the header is already sliced off
+                let keyLength = data[0] << 8 | data[1];
+
+                let aeskey = await window.crypto.subtle.unwrapKey(
+                    "raw",
+                    data.subarray(2, 2 + keyLength),
+                    this.keys.localKeys.privateKey,
+                    clientKeyConfig,
+                    {
+                        name: "AES-GCM",
+                        length: 256,
+                    },
+                    true,
+                    ["encrypt", "decrypt"],
+                )
+
+                let iv = data.subarray(2 + keyLength, 2 + keyLength + 16);
+                let encryptedData = data.subarray(2 + keyLength + 16);
+
+                console.log("Decrypting message", encryptedData);
+
+                data = new Uint8Array(await this.decrypt(encryptedData, aeskey, iv));
             }
 
             let message = {
@@ -187,13 +196,13 @@ export class WebRTCPeer {
 
             await this.peer.setLocalDescription(offer)
 
-            get(ws).send(JSON.stringify({
-                type: 'offer',
+            get(ws).send({
+                type: WebSocketMessageType.WEBRTC_OFFER,
                 data: {
                     roomId: this.roomId,
                     sdp: offer,
                 },
-            }));
+            });
         } catch (error) {
             console.info('Error creating offer:', error);
             // should trigger re-negotiation
@@ -221,13 +230,13 @@ export class WebRTCPeer {
 
             console.log("Sending answer", answer);
 
-            get(ws).send(JSON.stringify({
-                type: 'answer',
+            get(ws).send({
+                type: WebSocketMessageType.WERTC_ANSWER,
                 data: {
                     roomId: this.roomId,
                     sdp: answer,
                 },
-            }));
+            });
 
         } catch (error) {
             console.error('Error creating answer:', error);
@@ -248,20 +257,14 @@ export class WebRTCPeer {
 
     private async generateKeyPair() {
         console.log("Generating key pair");
+        // this key pair is used for wrapping the unique AES-GCM key for each message
         const keyPair = await window.crypto.subtle.generateKey(
-            {
-                name: "RSA-OAEP",
-                modulusLength: 4096,
-                publicExponent: new Uint8Array([1, 0, 1]),
-                hash: "SHA-256",
-            },
+            clientKeyConfig,
             true,
-            ["encrypt", "decrypt"],
+            ["wrapKey", "unwrapKey"],
         );
 
-        if (keyPair instanceof CryptoKey) {
-            throw new Error("Key pair not generated");
-        }
+        console.log("generated key pair", keyPair);
 
         this.keys.localKeys = keyPair;
     }
@@ -271,50 +274,40 @@ export class WebRTCPeer {
         await this.generateKeyPair();
         if (!this.keys.localKeys) throw new Error("Key pair not generated");
 
-        let wrappingKey = get(roomKey);
-        if (!wrappingKey.key) throw new Error("Room key not set");
+        console.log("exporting key", this.keys.localKeys.publicKey);
 
+        const exported = await window.crypto.subtle.exportKey("jwk", this.keys.localKeys.publicKey);
 
-        console.log("wrapping key", this.keys.localKeys.publicKey, wrappingKey.key);
-        const exported = await window.crypto.subtle.wrapKey(
-            "jwk",
-            this.keys.localKeys.publicKey,
-            wrappingKey.key,
-            {
-                name: "AES-KW",
-                length: 256,
-            },
-        );
-
-        console.log("wrapping key exported", exported);
-
-        const exportedKeyBuffer = exported;
+        // convert exported key to a string then pack that sting into an array buffer
+        const exportedKeyBuffer = new TextEncoder().encode(JSON.stringify(exported));
 
         console.log("exported key buffer", exportedKeyBuffer);
 
-        this.send(exportedKeyBuffer, WebRTCPacketType.KEY_EXCHANGE);
+        this.send(exportedKeyBuffer.buffer, WebRTCPacketType.KEY_EXCHANGE);
     }
 
-    private async encrypt(data: ArrayBuffer): Promise<ArrayBuffer> {
-        if (!this.keys.peersPublicKey) throw new Error("Peer's public key not set");
-
+    private async encrypt(data: Uint8Array<ArrayBuffer>, key: CryptoKey, iv: Uint8Array<ArrayBuffer>): Promise<ArrayBuffer> {
         return await window.crypto.subtle.encrypt(
             {
-                name: "RSA-OAEP",
+                name: "AES-GCM",
+                length: 256,
+                iv,
+                tagLength: 128,
             },
-            this.keys.peersPublicKey,
+            key,
             data,
         );
     }
 
-    private async decrypt(data: ArrayBuffer): Promise<ArrayBuffer> {
-        if (!this.keys.localKeys) throw new Error("Local keypair not generated");
-
+    private async decrypt(data: Uint8Array<ArrayBuffer>, key: CryptoKey, iv: Uint8Array<ArrayBuffer>): Promise<ArrayBuffer> {
         return await window.crypto.subtle.decrypt(
             {
-                name: "RSA-OAEP",
+                name: "AES-GCM",
+                length: 256,
+                iv,
+                tagLength: 128,
             },
-            this.keys.localKeys.privateKey,
+            key,
             data,
         );
     }
@@ -331,15 +324,36 @@ export class WebRTCPeer {
         if (this.keys.peersPublicKey && type != WebRTCPacketType.KEY_EXCHANGE) {
             console.log("Sending encrypted message", data);
 
-            let encryptedData = await this.encrypt(data);
+            let iv = window.crypto.getRandomValues(new Uint8Array(16));
+            let key = await window.crypto.subtle.generateKey(
+                {
+                    name: "AES-GCM",
+                    length: 256,
+                },
+                true,
+                ["encrypt", "decrypt"],
+            )
 
-            console.log("Encrypted data", encryptedData);
+            let encryptedData = await this.encrypt(new Uint8Array(data), key, iv);
+
+            let exportedKey = await window.crypto.subtle.wrapKey(
+                "raw",
+                key,
+                this.keys.peersPublicKey,
+                clientKeyConfig,
+            )
 
             header |= 1 << 7;
 
-            let buf = new Uint8Array(encryptedData.byteLength + 1);
+            let buf = new Uint8Array(encryptedData.byteLength + 3 + exportedKey.byteLength + iv.byteLength);
             buf[0] = header;
-            buf.subarray(1).set(new Uint8Array(encryptedData));
+            buf[1] = (exportedKey.byteLength >> 8) & 0xFF;
+            buf[2] = exportedKey.byteLength & 0xFF;
+            buf.subarray(3).set(new Uint8Array(exportedKey));
+            buf.subarray(3 + exportedKey.byteLength).set(new Uint8Array(iv));
+            buf.subarray(3 + exportedKey.byteLength + iv.byteLength).set(new Uint8Array(encryptedData));
+
+            console.log("Sending encrypted message", buf);
 
             this.dataChannel.send(buf.buffer);
         } else {

@@ -52,9 +52,6 @@ export interface SocketMessageRoomReady extends SocketMessageBase {
     data: {
         roomId: string;
         isInitiator: boolean;
-        roomKey: {
-            key: JsonWebKey;
-        };
     };
 }
 

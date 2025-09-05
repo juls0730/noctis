@@ -45,6 +45,13 @@ async function joinRoom(roomId: string, socket: WebSocket) {
         // for some reason, when you filter the array when the length is 1 it stays at 1, but we *know* that if its 1
         // then when this client disconnects, the room should be deleted since the room is empty
         if (room.length === 1) {
+            // give a 5 second grace period before deleting the room
+            setTimeout(() => {
+                if (rooms.get(roomId)?.length === 1) {
+                    console.log("Room is empty, deleting");
+                    deleteRoom(roomId);
+                }
+            }, 5000)
             deleteRoom(roomId);
             return;
         }
@@ -54,19 +61,9 @@ async function joinRoom(roomId: string, socket: WebSocket) {
 
     // TODO: consider letting rooms get larger than 2 clients
     if (room.length == 2) {
-        // A room key used to wrap the clients public keys during key exchange
-        let roomKey = await crypto.subtle.generateKey(
-            {
-                name: "AES-KW",
-                length: 256,
-            },
-            true,
-            ["wrapKey", "unwrapKey"],
-        )
-        let jsonWebKey = await crypto.subtle.exportKey("jwk", roomKey);
         room.forEach(async client => {
             // announce the room is ready, and tell each peer if they are the initiator
-            client.send(JSON.stringify({ type: SocketMessageType.ROOM_READY, data: { isInitiator: client !== socket, roomKey: { key: jsonWebKey } } }));
+            client.send(JSON.stringify({ type: SocketMessageType.ROOM_READY, data: { isInitiator: client !== socket } }));
         });
     }
 
