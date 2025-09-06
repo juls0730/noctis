@@ -1,22 +1,61 @@
 import { WebSocketServer } from "ws";
-import type { WebSocket } from "ws";
-import { SocketMessageType, type SocketMessage } from "../src/types/websocket";
+import { Socket, WebSocketMessageType, type WebSocketMessage } from "../src/types/websocket";
+import { LiveMap } from '../src/utils/liveMap.ts';
 
-// TODO: remove stale rooms somehow
-const rooms = new Map<string, WebSocket[]>();
+export class ServerRoom {
+    private clients: Socket[] = [];
 
-async function createRoom(socket: WebSocket): Promise<string> {
+    constructor(clients?: Socket[]) {
+        if (clients) {
+            this.clients = clients;
+        }
+    }
+
+    notifyAll(message: WebSocketMessage) {
+        this.clients.forEach(client => {
+            client.send(message);
+        });
+    }
+
+    get length(): number {
+        return this.clients.length;
+    }
+
+    push(client: Socket) {
+        this.clients.push(client);
+    }
+
+    set(clients: Socket[]) {
+        this.clients = clients;
+    }
+
+    filter(callback: (client: Socket) => boolean): Socket[] {
+        return this.clients.filter(callback);
+    }
+
+    forEachClient(callback: (client: Socket) => void) {
+        this.clients.forEach(callback);
+    }
+}
+
+const rooms = new LiveMap<string, ServerRoom>();
+
+async function createRoom(socket: Socket): Promise<string> {
     let roomId = Math.random().toString(36).substring(2, 10);
-    rooms.set(roomId, []);
+    let room = rooms.set(roomId, new ServerRoom());
 
-    socket.send(JSON.stringify({ type: SocketMessageType.ROOM_CREATED, data: roomId }));
+    socket.send({ type: WebSocketMessageType.ROOM_CREATED, data: room.key });
 
-    await joinRoom(roomId, socket);
+    try {
+        await joinRoom(room.key, socket);
+    } catch (e: any) {
+        throw e;
+    }
 
     return roomId;
 }
 
-async function joinRoom(roomId: string, socket: WebSocket) {
+async function joinRoom(roomId: string, socket: Socket): Promise<ServerRoom> {
     let room = rooms.get(roomId);
     console.log(room?.length);
 
@@ -26,21 +65,20 @@ async function joinRoom(roomId: string, socket: WebSocket) {
     }
 
     if (room.length == 2) {
-        socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Room is full' }));
-        return;
+        throw new Error("Room is full");
     }
 
     // notify all clients in the room of the new client, except the client itself
-    room.forEach(client => {
-        client.send(JSON.stringify({ type: SocketMessageType.JOIN_ROOM, data: roomId }));
-    });
+    room.notifyAll({ type: WebSocketMessageType.JOIN_ROOM, roomId });
     room.push(socket);
 
     socket.addEventListener('close', (ev) => {
         room = rooms.get(roomId)
         if (!room) {
-            return;
+            throw new Error("Room not found");
         }
+
+        room.notifyAll({ type: WebSocketMessageType.ROOM_LEFT, roomId });
 
         // for some reason, when you filter the array when the length is 1 it stays at 1, but we *know* that if its 1
         // then when this client disconnects, the room should be deleted since the room is empty
@@ -52,33 +90,33 @@ async function joinRoom(roomId: string, socket: WebSocket) {
                     deleteRoom(roomId);
                 }
             }, 5000)
-            deleteRoom(roomId);
             return;
         }
 
-        rooms.set(roomId, room.filter(client => client !== ev.target));
+        room.set(room.filter(client => client.ws !== ev.target));
     });
 
     // TODO: consider letting rooms get larger than 2 clients
     if (room.length == 2) {
-        room.forEach(async client => {
-            // announce the room is ready, and tell each peer if they are the initiator
-            client.send(JSON.stringify({ type: SocketMessageType.ROOM_READY, data: { isInitiator: client !== socket } }));
-        });
+        room.forEachClient(client => client.send({ type: WebSocketMessageType.ROOM_READY, data: { isInitiator: client !== socket } }));
     }
 
     console.log("Room created:", roomId, room.length);
+
+    return room;
 }
 
 function deleteRoom(roomId: string) {
     rooms.delete(roomId);
 }
 
-export function confgiureWebsocketServer(ws: WebSocketServer) {
-    ws.on('connection', socket => {
+export function confgiureWebsocketServer(wss: WebSocketServer) {
+    wss.on('connection', ws => {
+        let socket = new Socket(ws);
+
         // Handle messages from the client
-        socket.on('message', async event => {
-            let message: SocketMessage | undefined = undefined;
+        ws.on('message', async event => {
+            let message: WebSocketMessage | undefined = undefined;
 
             if (event instanceof Buffer) { // Assuming JSON is sent as a string
                 try {
@@ -91,50 +129,57 @@ export function confgiureWebsocketServer(ws: WebSocketServer) {
             if (message === undefined) {
                 console.log("Received non-JSON message:", event);
                 // If the message is not JSON, send an error message
-                socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Invalid message' }));
+                socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid message' });
                 return;
             }
 
+            let room: ServerRoom | undefined = undefined;
+
             switch (message.type) {
-                case SocketMessageType.CREATE_ROOM:
+                case WebSocketMessageType.CREATE_ROOM:
                     // else, create a new room
-                    await createRoom(socket);
+                    try {
+                        await createRoom(socket);
+                    } catch (e: any) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: e.message });
+                        throw e;
+                    }
                     break;
-                case SocketMessageType.JOIN_ROOM:
+                case WebSocketMessageType.JOIN_ROOM:
                     // if join message has a roomId, join the room
                     if (!message.roomId) {
-                        socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Invalid message' }));
+                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid message' });
                         return;
                     }
 
                     // if the user tries to join a room that doesnt exist, send an error message
                     if (rooms.get(message.roomId) == undefined) {
-                        socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Invalid roomId' }));
+                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid roomId' });
                         return;
                     }
 
-                    await joinRoom(message.roomId, socket);
+                    room = await joinRoom(message.roomId, socket);
 
                     // the client is now in the room and the peer knows about it
-                    socket.send(JSON.stringify({ type: SocketMessageType.ROOM_JOINED, roomId: message.roomId }));
+                    socket.send({ type: WebSocketMessageType.ROOM_JOINED, roomId: message.roomId, participants: room.length });
                     break;
-                case SocketMessageType.OFFER:
-                case SocketMessageType.ANSWER:
-                case SocketMessageType.ICE_CANDIDATE:
+                case WebSocketMessageType.WEBRTC_OFFER:
+                case WebSocketMessageType.WERTC_ANSWER:
+                case WebSocketMessageType.WEBRTC_ICE_CANDIDATE:
                     // relay these messages to the other peers in the room
-                    const room = rooms.get(message.data.roomId);
+                    room = rooms.get(message.data.roomId);
 
                     if (room) {
-                        room.forEach(client => {
+                        room.forEachClient(client => {
                             if (client !== socket) {
-                                client.send(JSON.stringify(message));
+                                client.send(message);
                             }
                         });
                     }
                     break;
                 default:
                     console.warn(`Unknown message type: ${message.type}`);
-                    socket.send(JSON.stringify({ type: SocketMessageType.ERROR, data: 'Unknown message type' }));
+                    socket.send({ type: WebSocketMessageType.ERROR, data: 'Unknown message type' });
                     break;
             }
         });

@@ -1,96 +1,145 @@
+
 export enum ConnectionState {
     CONNECTING,
+    RECONNECTING,
     CONNECTED,
     DISCONNECTED,
 }
 
-export enum SocketMessageType {
-    // requests
-    CREATE_ROOM = 'create',
-    JOIN_ROOM = 'join',
-
-    // responses
-    ROOM_CREATED = 'created',
-    ROOM_JOINED = 'joined',
-    ROOM_READY = 'ready',
-
-    // webrtc
-    ICE_CANDIDATE = 'ice-candidate',
-    OFFER = 'offer',
-    ANSWER = 'answer',
-
-    ERROR = 'error',
+export interface Room {
+    id: string | null;
+    participants: number;
+    connectionState: ConnectionState;
 }
 
-type SocketMessageBase = {
-    type: SocketMessageType;
-};
+export enum WebSocketMessageType {
+    // room messages
+    CREATE_ROOM = "create",
+    JOIN_ROOM = "join",
+    LEAVE_ROOM = "leave",
 
-export interface SocketMessageCreateRoom extends SocketMessageBase {
-    type: SocketMessageType.CREATE_ROOM;
+    // response messages
+    ROOM_CREATED = "created",
+    ROOM_JOINED = "joined",
+    ROOM_LEFT = "left",
+    ROOM_READY = "ready",
+
+    // webrtc messages
+    WEBRTC_OFFER = "offer",
+    WERTC_ANSWER = "answer",
+    WEBRTC_ICE_CANDIDATE = "ice-candidate",
+
+    ERROR = "error",
 }
 
-export interface SocketMessageJoinRoom extends SocketMessageBase {
-    type: SocketMessageType.JOIN_ROOM;
+export type WebSocketMessage =
+    | CreateRoomMessage
+    | JoinRoomMessage
+    | LeaveRoomMessage
+    | RoomCreatedMessage
+    | RoomJoinedMessage
+    | RoomLeftMessage
+    | RoomReadyMessage
+    | OfferMessage
+    | AnswerMessage
+    | IceCandidateMessage
+    | ErrorMessage;
+
+interface ErrorMessage {
+    type: WebSocketMessageType.ERROR;
+    data: string;
+}
+
+interface CreateRoomMessage {
+    type: WebSocketMessageType.CREATE_ROOM;
+}
+
+interface JoinRoomMessage {
+    type: WebSocketMessageType.JOIN_ROOM;
     roomId: string;
 }
 
-export interface SocketMessageRoomCreated extends SocketMessageBase {
-    type: SocketMessageType.ROOM_CREATED;
-    data: {
-        roomId: string;
-    };
-}
-
-export interface SocketMessageRoomJoined extends SocketMessageBase {
-    type: SocketMessageType.ROOM_JOINED;
+interface LeaveRoomMessage {
+    type: WebSocketMessageType.LEAVE_ROOM;
     roomId: string;
 }
 
-export interface SocketMessageRoomReady extends SocketMessageBase {
-    type: SocketMessageType.ROOM_READY;
+interface RoomCreatedMessage {
+    type: WebSocketMessageType.ROOM_CREATED;
+    data: string;
+}
+
+interface RoomJoinedMessage {
+    type: WebSocketMessageType.ROOM_JOINED;
+    roomId: string;
+    participants: number;
+}
+
+interface RoomLeftMessage {
+    type: WebSocketMessageType.ROOM_LEFT;
+    roomId: string;
+}
+
+interface RoomReadyMessage {
+    type: WebSocketMessageType.ROOM_READY;
     data: {
-        roomId: string;
         isInitiator: boolean;
     };
 }
 
-export interface SocketMessageIceCandidate extends SocketMessageBase {
-    type: SocketMessageType.ICE_CANDIDATE;
+interface OfferMessage {
+    type: WebSocketMessageType.WEBRTC_OFFER;
     data: {
         roomId: string;
-        candidate: RTCIceCandidate;
+        sdp: RTCSessionDescriptionInit;
     };
 }
 
-export interface SocketMessageOffer extends SocketMessageBase {
-    type: SocketMessageType.OFFER;
+interface AnswerMessage {
+    type: WebSocketMessageType.WERTC_ANSWER;
     data: {
         roomId: string;
-        sdp: RTCSessionDescription;
+        sdp: RTCSessionDescriptionInit;
     };
 }
 
-export interface SocketMessageAnswer extends SocketMessageBase {
-    type: SocketMessageType.ANSWER;
+interface IceCandidateMessage {
+    type: WebSocketMessageType.WEBRTC_ICE_CANDIDATE;
     data: {
         roomId: string;
-        sdp: RTCSessionDescription;
+        candidate: RTCIceCandidateInit;
     };
 }
 
-export interface SocketMessageError extends SocketMessageBase {
-    type: SocketMessageType.ERROR;
-    data: string;
+export interface SocketCallbacks {
+    onOpen: () => void;
+    onClose: () => void;
 }
 
-export type SocketMessage =
-    | SocketMessageCreateRoom
-    | SocketMessageJoinRoom
-    | SocketMessageRoomCreated
-    | SocketMessageRoomJoined
-    | SocketMessageRoomReady
-    | SocketMessageIceCandidate
-    | SocketMessageOffer
-    | SocketMessageAnswer
-    | SocketMessageError;
+export class Socket {
+    public ws: WebSocket;
+
+    public addEventListener: typeof WebSocket.prototype.addEventListener;
+    public removeEventListener: typeof WebSocket.prototype.removeEventListener;
+    public dispatchEvent: typeof WebSocket.prototype.dispatchEvent;
+    public close: typeof WebSocket.prototype.close;
+
+    constructor(webSocket: WebSocket) {
+        this.ws = webSocket;
+
+        this.ws.addEventListener("open", () => {
+            console.log("WebSocket opened");
+        });
+
+        this.addEventListener = this.ws.addEventListener.bind(this.ws);
+        this.removeEventListener = this.ws.removeEventListener.bind(this.ws);
+        this.dispatchEvent = this.ws.dispatchEvent.bind(this.ws);
+        this.close = this.ws.close.bind(this.ws);
+    }
+
+    public send(message: WebSocketMessage) {
+        console.log("Sending message:", message);
+
+        this.ws.send(JSON.stringify(message));
+    }
+}

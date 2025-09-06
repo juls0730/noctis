@@ -1,9 +1,6 @@
 <script lang="ts">
-    import {
-        ws,
-        webSocketConnected,
-        WebSocketMessageType,
-    } from "../stores/websocketStore";
+    import { ws, webSocketConnected } from "../stores/websocketStore";
+    import { WebSocketMessageType } from "../types/websocket";
     import { room } from "../stores/roomStore";
     import { browser } from "$app/environment";
     import { peer, handleMessage } from "../utils/webrtcUtil";
@@ -12,10 +9,6 @@
     import { ConnectionState } from "../types/websocket";
 
     onMount(async () => {
-        room.update((room) => ({
-            ...room,
-            connectionState: ConnectionState.CONNECTING,
-        }));
         $ws.addEventListener("message", handleMessage);
     });
 
@@ -38,7 +31,14 @@
 
     {#if $webSocketConnected}
         <button
-            on:click={() => {
+            onclick={() => {
+                // if we are in a room already, leave it
+                if ($room.id) {
+                    $ws.send({
+                        type: WebSocketMessageType.LEAVE_ROOM,
+                        roomId: $room.id,
+                    });
+                }
                 $ws.send({ type: WebSocketMessageType.CREATE_ROOM }); // send a message when the button is clicked
             }}>Create Room</button
         >
@@ -52,5 +52,5 @@
         <a href={`${location.origin}/${$room}`}>{location.origin}/{$room.id}</a>
     {/if}
 
-    <RtcMessage />
+    <RtcMessage {room} />
 </div>

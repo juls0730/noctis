@@ -1,7 +1,9 @@
 import { get } from 'svelte/store';
-import { WebSocketMessageType, ws } from '../stores/websocketStore';
+import { ws } from '../stores/websocketStore';
+import { WebSocketMessageType } from '../types/websocket';
 import { WebRTCPacketType, type KeyStore, type WebRTCPeerCallbacks } from '../types/webrtc';
 import { clientKeyConfig } from '../shared/keyConfig';
+import { browser } from '$app/environment';
 
 export class WebRTCPeer {
     private peer: RTCPeerConnection | null = null;
@@ -38,6 +40,8 @@ export class WebRTCPeer {
     }
 
     public async initialize() {
+        if (!browser) throw new Error("Cannot initialize WebRTCPeer in non-browser environment");
+
         // dont initialize twice
         if (this.peer) return;
 
@@ -115,14 +119,9 @@ export class WebRTCPeer {
 
                 console.log("Received key exchange", data.buffer);
 
-                const textDecoder = new TextDecoder();
-                const jsonKey = JSON.parse(textDecoder.decode(data));
-
-                console.log("Received key exchange", jsonKey);
-
                 this.keys.peersPublicKey = await window.crypto.subtle.importKey(
-                    "jwk",
-                    jsonKey,
+                    "spki",
+                    data.buffer,
                     clientKeyConfig,
                     true,
                     ["wrapKey"],
@@ -276,14 +275,12 @@ export class WebRTCPeer {
 
         console.log("exporting key", this.keys.localKeys.publicKey);
 
-        const exported = await window.crypto.subtle.exportKey("jwk", this.keys.localKeys.publicKey);
+        const exported = await window.crypto.subtle.exportKey("spki", this.keys.localKeys.publicKey);
 
         // convert exported key to a string then pack that sting into an array buffer
-        const exportedKeyBuffer = new TextEncoder().encode(JSON.stringify(exported));
+        console.log("exported key buffer", exported);
 
-        console.log("exported key buffer", exportedKeyBuffer);
-
-        this.send(exportedKeyBuffer.buffer, WebRTCPacketType.KEY_EXCHANGE);
+        this.send(exported, WebRTCPacketType.KEY_EXCHANGE);
     }
 
     private async encrypt(data: Uint8Array<ArrayBuffer>, key: CryptoKey, iv: Uint8Array<ArrayBuffer>): Promise<ArrayBuffer> {

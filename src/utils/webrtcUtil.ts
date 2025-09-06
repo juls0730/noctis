@@ -2,10 +2,10 @@ import { writable, get, type Writable } from "svelte/store";
 import { WebRTCPeer } from "$lib/webrtc";
 import { WebRTCPacketType } from "../types/webrtc";
 import { room } from "../stores/roomStore";
-import { ConnectionState } from "../types/websocket";
+import { ConnectionState, type Room } from "../types/websocket";
 import { messages } from "../stores/messageStore";
 import { MessageType, type Message } from "../types/message";
-import { WebSocketMessageType, type WebSocketMessage } from "../stores/websocketStore";
+import { WebSocketMessageType, type WebSocketMessage } from "../types/websocket";
 
 export const error: Writable<string | null> = writable(null);
 export let peer: Writable<WebRTCPeer | null> = writable(null);
@@ -73,14 +73,22 @@ export async function handleMessage(event: MessageEvent) {
     switch (message.type) {
         case WebSocketMessageType.ROOM_CREATED:
             console.log("Room created:", message.data);
-            room.update((room) => ({ ...room, id: message.data, connectionState: ConnectionState.CONNECTED }));
+            room.update((room) => ({ ...room, id: message.data, connectionState: ConnectionState.CONNECTED, participants: 1 }));
             return;
         case WebSocketMessageType.JOIN_ROOM:
             console.log("new client joined room");
+            room.update((room) => ({ ...room, participants: room.participants + 1 }));
             return;
         case WebSocketMessageType.ROOM_JOINED:
-            room.update((room) => ({ ...room, connectionState: ConnectionState.CONNECTED }));
+            // TODO: if a client disconnects, somehow prove the identity of the client that left if they return. Perhaps
+            // TODO: use a key derived from client's public key so that the room can only be used by clients that initiated
+            // TODO: the connection
+            room.update((room) => ({ ...room, connectionState: ConnectionState.CONNECTED, participants: message.participants }));
             console.log("Joined room");
+            return;
+        case WebSocketMessageType.ROOM_LEFT:
+            room.update((room) => ({ ...room, participants: room.participants - 1 }));
+            console.log("Participant left room");
             return;
         case WebSocketMessageType.ERROR:
             console.error("Error:", message.data);
@@ -100,9 +108,6 @@ export async function handleMessage(event: MessageEvent) {
                 callbacks,
             ));
             await get(peer)?.initialize();
-            if (message.data.isInitiator) {
-                await get(peer)?.createOffer();
-            }
             return;
     }
 

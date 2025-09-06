@@ -1,7 +1,7 @@
 <script lang="ts">
-    import { writable, type Writable } from "svelte/store";
-    import { room } from "../stores/roomStore";
-    import { webSocketConnected } from "../stores/websocketStore";
+    import { derived, writable, type Writable } from "svelte/store";
+    // import { room } from "../stores/roomStore";
+    import { webSocketConnected, ws } from "../stores/websocketStore";
     import {
         isRTCConnected,
         dataChannelReady,
@@ -10,13 +10,26 @@
     } from "../utils/webrtcUtil";
     import { messages } from "../stores/messageStore";
     import { WebRTCPacketType } from "../types/webrtc";
-    import { ConnectionState } from "../types/websocket";
+    import { ConnectionState, type Room } from "../types/websocket";
     import { MessageType } from "../types/message";
     import { fade } from "svelte/transition";
 
     let inputMessage: Writable<string> = writable("");
     let inputFile = writable(null);
-    let inputFileElement: HTMLInputElement;
+    let inputFileElement: HTMLInputElement | null = $state(null);
+    let initialConnectionComplete = derived(
+        [isRTCConnected, dataChannelReady, keyExchangeDone],
+        (values: Array<boolean>) => values.every((value) => value),
+    );
+
+    const { room }: { room: Writable<Room> } = $props();
+
+    room.subscribe((newRoom) => {
+        console.log("Room changed:", newRoom);
+        if (newRoom.id !== $room?.id) {
+            messages.set([]);
+        }
+    });
 
     function sendMessage() {
         if (!$peer) {
@@ -68,21 +81,29 @@
     });
 
     function pickFile() {
+        if (!inputFileElement) return;
+
         inputFileElement.click();
     }
 </script>
 
-<p>{$room?.id} - {$room?.connectionState} - {$webSocketConnected}</p>
+<p>
+    {$room?.id}
+    ({$room?.participants}) - {$room?.connectionState} - {$webSocketConnected}
+    - Initial connection {$initialConnectionComplete
+        ? "complete"
+        : "incomplete"}
+</p>
 
-<!-- If we are in a room, connected to the websocket server, and the have been informed that we are connected to the room -->
-{#if $room !== null && $webSocketConnected === true && $room.connectionState === ConnectionState.CONNECTED}
+<!-- If we are in a room, connected to the websocket server, and have been informed that we are connected to the room -->
+{#if ($room !== null && $webSocketConnected === true && $room.connectionState === ConnectionState.CONNECTED) || $room.connectionState === ConnectionState.RECONNECTING}
     <div
         class="flex flex-col sm:max-w-4/5 lg:max-w-3/5 min-h-[calc(5/12_*_100vh)]"
     >
         <div
             class="flex-grow flex flex-col overflow-y-auto mb-4 p-2 bg-gray-800 rounded break-all relative"
         >
-            {#if !$isRTCConnected || !$dataChannelReady || !$keyExchangeDone || !$canCloseLoadingOverlay}
+            {#if !$initialConnectionComplete || $room.connectionState === ConnectionState.RECONNECTING || $room.participants !== 2 || !$canCloseLoadingOverlay}
                 <div
                     transition:fade={{ duration: 300 }}
                     class="absolute top-0 left-0 bottom-0 right-0 flex justify-center items-center flex-col bg-black/55 backdrop-blur-md"
@@ -93,6 +114,15 @@
                         <p>Establishing data channel...</p>
                     {:else if !$keyExchangeDone}
                         <p>Establishing a secure connection with the peer...</p>
+                    {:else if $room.connectionState === ConnectionState.RECONNECTING}
+                        <p>
+                            Disconnect from peer, attempting to reconnecting...
+                        </p>
+                    {:else if $room.participants !== 2}
+                        <p>
+                            Peer has disconnected, waiting for other peer to
+                            reconnect...
+                        </p>
                     {:else}
                         <p>
                             Successfully established a secure connection to
@@ -100,7 +130,7 @@
                         </p>
                     {/if}
                     <div class="mt-2">
-                        {#if !$keyExchangeDone}
+                        {#if !$keyExchangeDone || $room.participants !== 2 || $room.connectionState === ConnectionState.RECONNECTING}
                             <!-- loading spinner -->
                             <svg
                                 class="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
@@ -171,19 +201,21 @@
             <input
                 type="text"
                 bind:value={$inputMessage}
-                on:keyup={(e) => e.key === "Enter" && sendMessage()}
+                onkeyup={(e) => e.key === "Enter" && sendMessage()}
                 disabled={!$isRTCConnected ||
                     !$dataChannelReady ||
-                    !$keyExchangeDone}
+                    !$keyExchangeDone ||
+                    $room.connectionState === ConnectionState.RECONNECTING}
                 placeholder="Type your message..."
                 class="flex-grow p-2 rounded bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-400
             focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <button
-                on:click={pickFile}
+                onclick={pickFile}
                 disabled={!$isRTCConnected ||
                     !$dataChannelReady ||
-                    !$keyExchangeDone}
+                    !$keyExchangeDone ||
+                    $room.connectionState === ConnectionState.RECONNECTING}
                 aria-label="Pick file"
                 class="px-4 py-2 bg-blue-600 not-disabled:hover:bg-blue-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -203,10 +235,11 @@
                 >
             </button>
             <button
-                on:click={sendMessage}
+                onclick={sendMessage}
                 disabled={!$isRTCConnected ||
                     !$dataChannelReady ||
-                    !$keyExchangeDone}
+                    !$keyExchangeDone ||
+                    $room.connectionState === ConnectionState.RECONNECTING}
                 class="px-4 py-2 bg-blue-600 not-disabled:hover:bg-blue-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
             >
                 Send
@@ -214,3 +247,9 @@
         </div>
     </div>
 {/if}
+
+<button
+    onclick={() => {
+        $ws.close();
+    }}>Simulate disconnect</button
+>
