@@ -7,5 +7,9 @@ export default defineConfig({
     plugins: [tailwindcss(), sveltekit(), webSocketServer],
     server: {
         allowedHosts: ['.trycloudflare.com'],
+    },
+    ssr: {
+        // ts-mls is problematic, make vite bundle it
+        noExternal: ['ts-mls']
     }
 });

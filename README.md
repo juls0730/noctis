@@ -8,7 +8,11 @@ A peer-to-peer encrypted file sharing app.
 - P2P file sharing
 - P2P chat
 
-Your data is peer-to-peer encrypted and only accessible to the people you share it with, it never touches any servers.
+Data is end-to-end encrypted with MLS. MLS is currently implemented with [ts-mls](https://github.com/LukaJCB/ts-mls). Due
+to MLS' age, there are not many libraries for it yet and as a result, there is no gurantee that the implementation will
+be bug-free or completely secure. Hopefully this will change in the future, but until then, be careful, this project
+shouldnt be used for anything actually important. In the future I may consider switching to mls-ts from Matrix, or write
+wasm bindings for AWS' mls-rs library.
 
 ## How to use
 1. clone the repo

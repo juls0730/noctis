@@ -55,17 +55,19 @@ async function createRoom(socket: Socket): Promise<string> {
     return roomId;
 }
 
-async function joinRoom(roomId: string, socket: Socket): Promise<ServerRoom> {
+async function joinRoom(roomId: string, socket: Socket): Promise<ServerRoom | undefined> {
     let room = rooms.get(roomId);
     console.log(room?.length);
 
     // should be unreachable
     if (!room) {
-        throw new Error(`Room ${roomId} does not exist`);
+        socket.send({ type: WebSocketMessageType.ERROR, data: `Room ${roomId} does not exist` });
+        return undefined;
     }
 
     if (room.length == 2) {
-        throw new Error("Room is full");
+        socket.send({ type: WebSocketMessageType.ERROR, data: "Room is full" });
+        return undefined;
     }
 
     // notify all clients in the room of the new client, except the client itself
@@ -112,6 +114,8 @@ function deleteRoom(roomId: string) {
 
 export function confgiureWebsocketServer(wss: WebSocketServer) {
     wss.on('connection', ws => {
+        // complains about dispatchEvent being undefined
+        // @ts-ignore
         let socket = new Socket(ws);
 
         // Handle messages from the client
@@ -146,19 +150,18 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                     }
                     break;
                 case WebSocketMessageType.JOIN_ROOM:
-                    // if join message has a roomId, join the room
                     if (!message.roomId) {
                         socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid message' });
                         return;
                     }
 
-                    // if the user tries to join a room that doesnt exist, send an error message
                     if (rooms.get(message.roomId) == undefined) {
                         socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid roomId' });
                         return;
                     }
 
                     room = await joinRoom(message.roomId, socket);
+                    if (!room) return;
 
                     // the client is now in the room and the peer knows about it
                     socket.send({ type: WebSocketMessageType.ROOM_JOINED, roomId: message.roomId, participants: room.length });

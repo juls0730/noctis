@@ -121,7 +121,6 @@ export class Socket {
 
     public addEventListener: typeof WebSocket.prototype.addEventListener;
     public removeEventListener: typeof WebSocket.prototype.removeEventListener;
-    public dispatchEvent: typeof WebSocket.prototype.dispatchEvent;
     public close: typeof WebSocket.prototype.close;
 
     constructor(webSocket: WebSocket) {
@@ -133,7 +132,6 @@ export class Socket {
 
         this.addEventListener = this.ws.addEventListener.bind(this.ws);
         this.removeEventListener = this.ws.removeEventListener.bind(this.ws);
-        this.dispatchEvent = this.ws.dispatchEvent.bind(this.ws);
         this.close = this.ws.close.bind(this.ws);
     }
 

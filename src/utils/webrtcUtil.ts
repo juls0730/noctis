@@ -20,7 +20,6 @@ const callbacks = {
     },
     //! TODO: come up with a more complex room system. This is largely for testing purposes
     onMessage: (message: { type: WebRTCPacketType, data: ArrayBuffer }) => {
-        // onMessage: (message: string | ArrayBuffer) => {
         console.log("WebRTC Received message:", message);
         // if (typeof message === 'object' && message instanceof Blob) {
         //     // download the file
@@ -64,8 +63,6 @@ const callbacks = {
     },
 };
 
-
-
 export async function handleMessage(event: MessageEvent) {
     console.log("Message received:", event.data, typeof event.data);
     const message: WebSocketMessage = JSON.parse(event.data);
@@ -80,9 +77,7 @@ export async function handleMessage(event: MessageEvent) {
             room.update((room) => ({ ...room, participants: room.participants + 1 }));
             return;
         case WebSocketMessageType.ROOM_JOINED:
-            // TODO: if a client disconnects, somehow prove the identity of the client that left if they return. Perhaps
-            // TODO: use a key derived from client's public key so that the room can only be used by clients that initiated
-            // TODO: the connection
+            // TODO: if a client disconnects, we need to resync the room state
             room.update((room) => ({ ...room, connectionState: ConnectionState.CONNECTED, participants: message.participants }));
             console.log("Joined room");
             return;
@@ -102,12 +97,14 @@ export async function handleMessage(event: MessageEvent) {
                 return;
             }
 
+            console.log("Creating peer");
             peer.set(new WebRTCPeer(
                 roomId,
                 message.data.isInitiator,
                 callbacks,
             ));
-            await get(peer)?.initialize();
+
+            await get(peer)!.initialize();
             return;
     }
 

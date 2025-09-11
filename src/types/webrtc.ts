@@ -10,7 +10,10 @@ export interface WebRTCPeerCallbacks {
 // max 7 bits for the type
 export enum WebRTCPacketType {
     // all bits set
-    KEY_EXCHANGE = 127,
+    KEY_PACKAGE = 127,
+    WELCOME = 126,
+    GROUP_OPEN = 125,
+
     MESSAGE = 0,
 }
 
