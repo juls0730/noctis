@@ -49,7 +49,7 @@
 
 <div class="p-4">
     {#if $error}
-        <p>Whoops! That room doesn't exist.</p>
+        <p>Hm. Something went wrong: {$error.toLocaleLowerCase()}</p>
     {:else if $room.connectionState !== ConnectionState.CONNECTED && $room.connectionState !== ConnectionState.RECONNECTING}
         <p>Connecting to server...</p>
     {:else}

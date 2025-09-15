@@ -55,6 +55,10 @@ export class WebRTCPeer {
             iceServers: this.iceServers,
         });
 
+        this.peer.onicecandidateerror = (event) => {
+            console.error("ICE candidate error:", event);
+        }
+
         // 1. Initialize ICE candidates
         this.peer.onicecandidate = (event) => {
             if (event.candidate) {
@@ -93,14 +97,12 @@ export class WebRTCPeer {
         channel.binaryType = "arraybuffer";
 
         channel.onopen = async () => {
-            console.log('data channel open');
-            this.callbacks.onDataChannelOpen();
-            this.callbacks.onKeyExchangeDone();
-
-            await this.generateKeyPair();
+            this.callbacks.onDataChannelStateChange(true);
 
             try {
                 if (this.isInitiator) {
+                    await this.generateKeyPair();
+
                     let groupId = crypto.getRandomValues(new Uint8Array(24));
                     this.clientState = await createGroup(groupId, this.keyPackage!.publicPackage, this.keyPackage!.privatePackage, [], this.cipherSuite!);
 
@@ -136,6 +138,7 @@ export class WebRTCPeer {
             console.log("parsed data", data, encrypted, type);
 
             if (type === WebRTCPacketType.GROUP_OPEN) {
+                await this.generateKeyPair();
                 await this.startKeyExchange();
                 return;
             }
@@ -179,6 +182,7 @@ export class WebRTCPeer {
 
                 this.send(encodedWelcomeBuf, WebRTCPacketType.WELCOME);
                 this.encyptionReady = true;
+                this.callbacks.onKeyExchangeDone();
 
                 return;
             }
@@ -202,6 +206,7 @@ export class WebRTCPeer {
 
                 console.log("Joined group", this.clientState);
                 this.encyptionReady = true;
+                this.callbacks.onKeyExchangeDone();
                 return;
             }
 
@@ -231,11 +236,12 @@ export class WebRTCPeer {
                 data: data.buffer,
             };
 
-            this.callbacks.onMessage(message);
+            this.callbacks.onMessage(message, this);
         };
 
         channel.onclose = () => {
-            console.log('data channel closed');
+            this.callbacks.onDataChannelStateChange(false);
+
         };
 
         channel.onerror = (error) => {

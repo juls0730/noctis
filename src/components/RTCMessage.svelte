@@ -8,19 +8,45 @@
         peer,
         keyExchangeDone,
     } from "../utils/webrtcUtil";
-    import { messages } from "../stores/messageStore";
+    import {
+        advertisedOffers,
+        fileRequestIds,
+        messages,
+        receivedOffers,
+    } from "../stores/messageStore";
     import { WebRTCPacketType } from "../types/webrtc";
     import { ConnectionState, type Room } from "../types/websocket";
     import { MessageType } from "../types/message";
     import { fade } from "svelte/transition";
+    import { WebBuffer } from "../utils/buffer";
 
     let inputMessage: Writable<string> = writable("");
-    let inputFile = writable(null);
+    let inputFile: Writable<FileList | null | undefined> = writable(null);
     let inputFileElement: HTMLInputElement | null = $state(null);
+    let initialConnectionCompleteCount = writable(0);
     let initialConnectionComplete = derived(
-        [isRTCConnected, dataChannelReady, keyExchangeDone],
-        (values: Array<boolean>) => values.every((value) => value),
+        initialConnectionCompleteCount,
+        (value) => value === 3,
     );
+
+    // TODO: is this the most elegant way to do this?
+    isRTCConnected.subscribe((value) => {
+        if (value) {
+            $initialConnectionCompleteCount++;
+        }
+    });
+
+    dataChannelReady.subscribe((value) => {
+        if (value) {
+            $initialConnectionCompleteCount++;
+        }
+    });
+
+    keyExchangeDone.subscribe((value) => {
+        if (value) {
+            $initialConnectionCompleteCount++;
+        }
+    });
 
     const { room }: { room: Writable<Room> } = $props();
 
@@ -28,6 +54,9 @@
         console.log("Room changed:", newRoom);
         if (newRoom.id !== $room?.id) {
             messages.set([]);
+            isRTCConnected.set(false);
+            dataChannelReady.set(false);
+            keyExchangeDone.set(false);
         }
     });
 
@@ -37,15 +66,69 @@
             return;
         }
 
-        if (!$inputFile && !$inputMessage) {
+        let messageBuf: Uint8Array<ArrayBuffer> | undefined = undefined;
+
+        if (!$inputFile && !$inputMessage.trim()) {
             return;
         }
 
-        // if ($inputFile != null && $inputFile[0] !== undefined) {
-        //     $messages = [...$messages, `You: ${$inputFile[0].name}`];
-        //     $peer.send($inputFile[0]);
-        //     $inputFile = null;
-        // }
+        if ($inputFile != null && $inputFile[0] !== undefined) {
+            // fileSize + fileNameSize + fileNameLen + id + textLen + header
+            let messageLen =
+                8 +
+                $inputFile[0].name.length +
+                2 +
+                8 +
+                $inputMessage.length +
+                1;
+            let messageBuf = new WebBuffer(new ArrayBuffer(messageLen));
+
+            let fileId = new WebBuffer(
+                crypto.getRandomValues(new Uint8Array(8)).buffer,
+            ).readBigInt64LE();
+            $advertisedOffers.set(fileId, $inputFile[0]);
+
+            console.log(
+                "Advertised file:",
+                fileId,
+                $inputFile[0].size,
+                $inputFile[0].name,
+                $inputFile[0].name.length,
+            );
+
+            messageBuf.writeInt8(MessageType.FILE_OFFER);
+            messageBuf.writeBigInt64LE(BigInt($inputFile[0].size));
+            messageBuf.writeInt16LE($inputFile[0].name.length);
+            messageBuf.writeString($inputFile[0].name);
+            messageBuf.writeBigInt64LE(fileId);
+            messageBuf.writeString($inputMessage);
+
+            console.log(
+                "Sending file offer",
+                new Uint8Array(messageBuf.buffer),
+            );
+
+            $messages = [
+                ...$messages,
+                {
+                    initiator: true,
+                    type: MessageType.FILE_OFFER,
+                    data: {
+                        fileSize: BigInt($inputFile[0].size),
+                        fileNameSize: $inputFile[0].name.length,
+                        fileName: $inputFile[0].name,
+                        id: fileId,
+                        text: $inputMessage === "" ? null : $inputMessage,
+                    },
+                },
+            ];
+
+            $inputFile = null;
+            $inputMessage = "";
+
+            $peer.send(messageBuf.buffer, WebRTCPacketType.MESSAGE);
+            return;
+        }
 
         if ($inputMessage) {
             $messages = [
@@ -56,17 +139,46 @@
                     data: $inputMessage,
                 },
             ];
-            $peer.send(
-                new TextEncoder().encode(
-                    JSON.stringify({
-                        type: MessageType.TEXT,
-                        data: $inputMessage,
-                    }),
-                ).buffer,
-                WebRTCPacketType.MESSAGE,
-            );
+
+            let newMessageBuf = new ArrayBuffer(1 + $inputMessage.length);
+            messageBuf = new Uint8Array(newMessageBuf);
+
+            messageBuf[0] = MessageType.TEXT;
+            messageBuf.set(new TextEncoder().encode($inputMessage), 1);
+
             $inputMessage = "";
         }
+
+        if (!messageBuf) {
+            return;
+        }
+
+        $peer.send(messageBuf.buffer, WebRTCPacketType.MESSAGE);
+    }
+
+    function downloadFile(id: bigint) {
+        if (!$peer) {
+            console.error("Peer not initialized");
+            return;
+        }
+
+        let file = $receivedOffers.get(id);
+        if (!file) {
+            console.error("Unknown file id:", id);
+            return;
+        }
+
+        let requesterId = new WebBuffer(
+            crypto.getRandomValues(new Uint8Array(8)).buffer,
+        ).readBigInt64LE();
+        let fileRequestBuf = new WebBuffer(new ArrayBuffer(1 + 8 + 8));
+        fileRequestBuf.writeInt8(MessageType.FILE_REQUEST);
+        fileRequestBuf.writeBigInt64LE(id);
+        fileRequestBuf.writeBigInt64LE(requesterId);
+
+        $fileRequestIds.set(requesterId, id);
+
+        $peer.send(fileRequestBuf.buffer, WebRTCPacketType.MESSAGE);
     }
 
     let canCloseLoadingOverlay = writable(false);
@@ -85,6 +197,29 @@
 
         inputFileElement.click();
     }
+
+    function autogrow(node: HTMLElement) {
+        function resize() {
+            // 1. Temporarily reset height to calculate the new scrollHeight
+            node.style.height = "0px";
+            // 2. Set the height to the scrollHeight, which represents the full content height
+            node.style.height = `${node.scrollHeight}px`;
+        }
+
+        // Call resize initially in case the textarea already has content
+        resize();
+
+        // Add an event listener to resize on every input
+        node.addEventListener("input", resize);
+
+        // Return a destroy method to clean up the event listener when the component is unmounted
+        return {
+            update: resize,
+            destroy() {
+                node.removeEventListener("input", resize);
+            },
+        };
+    }
 </script>
 
 <p>
@@ -101,16 +236,16 @@
         class="flex flex-col sm:max-w-4/5 lg:max-w-3/5 min-h-[calc(5/12_*_100vh)]"
     >
         <div
-            class="flex-grow flex flex-col overflow-y-auto mb-4 p-2 bg-gray-800 rounded break-all relative"
+            class="flex-grow flex flex-col overflow-y-auto mb-4 p-2 bg-gray-800 rounded relative whitespace-break-spaces wrap-anywhere"
         >
-            {#if !$initialConnectionComplete || $room.connectionState === ConnectionState.RECONNECTING || $room.participants !== 2 || !$canCloseLoadingOverlay}
+            {#if !$initialConnectionComplete || $room.connectionState === ConnectionState.RECONNECTING || $room.participants !== 2 || $dataChannelReady === false || !$canCloseLoadingOverlay}
                 <div
                     transition:fade={{ duration: 300 }}
-                    class="absolute top-0 left-0 bottom-0 right-0 flex justify-center items-center flex-col bg-black/55 backdrop-blur-md"
+                    class="absolute top-0 left-0 bottom-0 right-0 flex justify-center items-center flex-col bg-black/55 backdrop-blur-md z-10 text-center"
                 >
                     {#if !$isRTCConnected}
                         <p>Waiting for peer to connect...</p>
-                    {:else if !$dataChannelReady}
+                    {:else if !$dataChannelReady && !$initialConnectionComplete}
                         <p>Establishing data channel...</p>
                     {:else if !$keyExchangeDone}
                         <p>Establishing a secure connection with the peer...</p>
@@ -118,7 +253,7 @@
                         <p>
                             Disconnect from peer, attempting to reconnecting...
                         </p>
-                    {:else if $room.participants !== 2}
+                    {:else if $room.participants !== 2 || $dataChannelReady === false}
                         <p>
                             Peer has disconnected, waiting for other peer to
                             reconnect...
@@ -130,7 +265,7 @@
                         </p>
                     {/if}
                     <div class="mt-2">
-                        {#if !$keyExchangeDone || $room.participants !== 2 || $room.connectionState === ConnectionState.RECONNECTING}
+                        {#if !$keyExchangeDone || $room.participants !== 2 || $dataChannelReady === false || $room.connectionState === ConnectionState.RECONNECTING}
                             <!-- loading spinner -->
                             <svg
                                 class="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
@@ -174,20 +309,59 @@
             {/if}
             {#each $messages as msg}
                 <div class="flex flex-row gap-2">
-                    <p class="break-keep">
+                    <p class="whitespace-nowrap">
                         {#if msg.initiator}
                             You:
                         {:else}
                             Peer:
                         {/if}
                     </p>
-                    <p>
-                        {#if msg.type === MessageType.TEXT}
-                            {msg.data}
-                        {:else}
-                            Unknown message type: {msg.type}
-                        {/if}
-                    </p>
+                    {#if msg.type === MessageType.TEXT}
+                        <p>{msg.data}</p>
+                    {:else if msg.type === MessageType.FILE_OFFER}
+                        <div class="flex flex-col w-full mb-2">
+                            {#if msg.data.text !== null}
+                                <p>
+                                    {msg.data.text}
+                                </p>
+                            {/if}
+                            <div
+                                class="flex flex-col p-2 relative w-8/12 bg-gray-600 rounded"
+                            >
+                                <h2 class="text-lg font-semibold my-1">
+                                    {msg.data.fileName}
+                                </h2>
+                                <p class="text-sm">
+                                    {msg.data.fileSize} bytes
+                                </p>
+                                <!-- as the initiator, we cant send ourselves a file -->
+                                {#if !msg.initiator}
+                                    <button
+                                        onclick={() =>
+                                            downloadFile(msg.data.id)}
+                                        class="absolute right-2 bottom-2 p-1 border border-gray-500 text-gray-100 hover:bg-gray-800/70 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                                    >
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 24 24"
+                                            ><!-- Icon from Tabler Icons by Paweł Kuna - https://github.com/tabler/tabler-icons/blob/master/LICENSE --><path
+                                                fill="none"
+                                                stroke="currentColor"
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5l5-5m-5-7v12"
+                                            /></svg
+                                        >
+                                    </button>
+                                {/if}
+                            </div>
+                        </div>
+                    {:else}
+                        <p>Unknown message type: {msg.type}</p>
+                    {/if}
                 </div>
             {/each}
         </div>
@@ -198,52 +372,143 @@
             class="absolute opacity-0 -top-[9999px] -left-[9999px]"
         />
         <div class="flex gap-2 w-full flex-row">
-            <input
-                type="text"
-                bind:value={$inputMessage}
-                onkeyup={(e) => e.key === "Enter" && sendMessage()}
-                disabled={!$isRTCConnected ||
-                    !$dataChannelReady ||
-                    !$keyExchangeDone ||
-                    $room.connectionState === ConnectionState.RECONNECTING}
-                placeholder="Type your message..."
-                class="flex-grow p-2 rounded bg-gray-700 border border-gray-600 text-gray-100 placeholder-gray-400
-            focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            />
-            <button
-                onclick={pickFile}
-                disabled={!$isRTCConnected ||
-                    !$dataChannelReady ||
-                    !$keyExchangeDone ||
-                    $room.connectionState === ConnectionState.RECONNECTING}
-                aria-label="Pick file"
-                class="px-4 py-2 bg-blue-600 not-disabled:hover:bg-blue-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            <div
+                class="border rounded border-gray-600 flex-grow flex flex-col bg-gray-700"
             >
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    ><!-- Icon from Tabler Icons by Paweł Kuna - https://github.com/tabler/tabler-icons/blob/master/LICENSE --><path
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="m15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3L18 10a3 3 0 0 0-6-6l-6.5 6.5a4.5 4.5 0 0 0 9 9L21 13"
-                    /></svg
+                {#if $inputFile}
+                    <div class="flex flex-row gap-2 p-2">
+                        <div
+                            class="p-2 flex flex-col gap-2 w-48 border rounded-md border-gray-600 relative"
+                        >
+                            <div class="w-full flex justify-center">
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="128"
+                                    height="128"
+                                    viewBox="0 0 24 24"
+                                    ><!-- Icon from Tabler Icons by Paweł Kuna - https://github.com/tabler/tabler-icons/blob/master/LICENSE --><g
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="1"
+                                        ><path
+                                            d="M14 3v4a1 1 0 0 0 1 1h4"
+                                        /><path
+                                            d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2"
+                                        /></g
+                                    ></svg
+                                >
+                            </div>
+                            <p
+                                class="text-sm whitespace-nowrap overflow-hidden text-ellipsis"
+                            >
+                                {$inputFile[0].name}
+                            </p>
+
+                            <button
+                                onclick={() => {
+                                    $inputFile = null;
+                                }}
+                                class="absolute right-2 top-2 p-1 border border-gray-600 text-gray-100 hover:bg-gray-800/70 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    ><!-- Icon from Tabler Icons by Paweł Kuna - https://github.com/tabler/tabler-icons/blob/master/LICENSE --><path
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M18 6L6 18M6 6l12 12"
+                                    /></svg
+                                >
+                            </button>
+                        </div>
+                    </div>
+                    <hr class="border-gray-600" />
+                {/if}
+                <div
+                    class="flex flex-row focus-within:ring-2 focus-within:ring-blue-500 rounded"
                 >
-            </button>
-            <button
-                onclick={sendMessage}
-                disabled={!$isRTCConnected ||
-                    !$dataChannelReady ||
-                    !$keyExchangeDone ||
-                    $room.connectionState === ConnectionState.RECONNECTING}
-                class="px-4 py-2 bg-blue-600 not-disabled:hover:bg-blue-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-                Send
-            </button>
+                    <textarea
+                        bind:value={$inputMessage}
+                        cols="1"
+                        use:autogrow={$inputMessage}
+                        onkeydown={(e) => {
+                            if (
+                                e.key === "Enter" &&
+                                !e.getModifierState("Shift")
+                            ) {
+                                e.preventDefault();
+                                sendMessage();
+                            }
+                        }}
+                        disabled={!$isRTCConnected ||
+                            !$dataChannelReady ||
+                            !$keyExchangeDone ||
+                            $room.connectionState ===
+                                ConnectionState.RECONNECTING}
+                        placeholder="Type your message..."
+                        class="flex-grow p-2 bg-gray-700 rounded text-gray-100 placeholder-gray-400 min-h-12
+            focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-8"
+                    ></textarea>
+                    <div class="flex flex-row gap-2 p-2 h-fit mt-auto">
+                        <button
+                            onclick={pickFile}
+                            disabled={!$isRTCConnected ||
+                                !$dataChannelReady ||
+                                !$keyExchangeDone ||
+                                $room.connectionState ===
+                                    ConnectionState.RECONNECTING}
+                            aria-label="Pick file"
+                            class="not-disabled:hover:bg-gray-800/70 h-fit p-1 text-gray-100 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="24"
+                                height="24"
+                                viewBox="0 0 24 24"
+                                ><!-- Icon from Tabler Icons by Paweł Kuna - https://github.com/tabler/tabler-icons/blob/master/LICENSE --><path
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="m15 7l-6.5 6.5a1.5 1.5 0 0 0 3 3L18 10a3 3 0 0 0-6-6l-6.5 6.5a4.5 4.5 0 0 0 9 9L21 13"
+                                /></svg
+                            >
+                        </button>
+                        <button
+                            onclick={sendMessage}
+                            disabled={!$isRTCConnected ||
+                                !$dataChannelReady ||
+                                !$keyExchangeDone ||
+                                $room.connectionState ===
+                                    ConnectionState.RECONNECTING}
+                            class="not-disabled:hover:bg-gray-800/70 h-fit p-1 text-gray-100 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="24"
+                                height="24"
+                                viewBox="0 0 24 24"
+                                ><!-- Icon from Tabler Icons by Paweł Kuna - https://github.com/tabler/tabler-icons/blob/master/LICENSE --><path
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M10 14L21 3m0 0l-6.5 18a.55.55 0 0 1-1 0L10 14l-7-3.5a.55.55 0 0 1 0-1z"
+                                /></svg
+                            >
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 {/if}

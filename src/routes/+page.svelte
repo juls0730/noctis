@@ -38,6 +38,12 @@
                         type: WebSocketMessageType.LEAVE_ROOM,
                         roomId: $room.id,
                     });
+                    $peer?.close();
+                    peer.set(null);
+                    room.update((room) => ({
+                        ...room,
+                        connectionState: ConnectionState.DISCONNECTED,
+                    }));
                 }
                 $ws.send({ type: WebSocketMessageType.CREATE_ROOM }); // send a message when the button is clicked
             }}>Create Room</button

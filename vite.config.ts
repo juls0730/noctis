@@ -6,7 +6,7 @@ import { webSocketServer } from './src/websocket.ts';
 export default defineConfig({
     plugins: [tailwindcss(), sveltekit(), webSocketServer],
     server: {
-        allowedHosts: ['.trycloudflare.com'],
+        allowedHosts: true,
     },
     ssr: {
         // ts-mls is problematic, make vite bundle it

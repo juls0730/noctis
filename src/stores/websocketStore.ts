@@ -8,6 +8,8 @@ export const webSocketConnected = writable(false);
 
 function createSocket(): Socket {
     if (!browser) {
+        // this only occurs on the server, which we dont care about because its not a client that can actually connect to the websocket server
+        // @ts-ignore
         return null;
     }
 

@@ -75,11 +75,6 @@ async function joinRoom(roomId: string, socket: Socket): Promise<ServerRoom | un
     room.push(socket);
 
     socket.addEventListener('close', (ev) => {
-        room = rooms.get(roomId)
-        if (!room) {
-            throw new Error("Room not found");
-        }
-
         room.notifyAll({ type: WebSocketMessageType.ROOM_LEFT, roomId });
 
         // for some reason, when you filter the array when the length is 1 it stays at 1, but we *know* that if its 1
@@ -104,6 +99,34 @@ async function joinRoom(roomId: string, socket: Socket): Promise<ServerRoom | un
     }
 
     console.log("Room created:", roomId, room.length);
+
+    return room;
+}
+
+function leaveRoom(roomId: string, socket: Socket): ServerRoom | undefined {
+    let room = rooms.get(roomId);
+    console.log(room?.length);
+
+    // should be unreachable
+    if (!room) {
+        socket.send({ type: WebSocketMessageType.ERROR, data: `Room ${roomId} does not exist` });
+        return undefined;
+    }
+
+    if (room.length == 1) {
+        // give a 5 second grace period before deleting the room
+        setTimeout(() => {
+            if (rooms.get(roomId)?.length === 1) {
+                console.log("Room is empty, deleting");
+                deleteRoom(roomId);
+            }
+        }, 5000)
+        return;
+    }
+
+    room.set(room.filter(client => client !== socket));
+
+    socket.send({ type: WebSocketMessageType.ROOM_LEFT, roomId });
 
     return room;
 }
@@ -165,6 +188,21 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
 
                     // the client is now in the room and the peer knows about it
                     socket.send({ type: WebSocketMessageType.ROOM_JOINED, roomId: message.roomId, participants: room.length });
+                    break;
+                case WebSocketMessageType.LEAVE_ROOM:
+                    if (!message.roomId) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid message' });
+                        return;
+                    }
+
+                    if (rooms.get(message.roomId) == undefined) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid roomId' });
+                        return;
+                    }
+
+                    room = await leaveRoom(message.roomId, socket);
+                    if (!room) return;
+
                     break;
                 case WebSocketMessageType.WEBRTC_OFFER:
                 case WebSocketMessageType.WERTC_ANSWER:

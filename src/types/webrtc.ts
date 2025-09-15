@@ -1,7 +1,9 @@
+import type { WebRTCPeer } from "$lib/webrtc";
+
 export interface WebRTCPeerCallbacks {
     onConnected: () => void;
-    onMessage: (message: { type: WebRTCPacketType, data: ArrayBuffer }) => void;
-    onDataChannelOpen: () => void;
+    onMessage: (message: { type: WebRTCPacketType, data: ArrayBuffer }, webRtcPeer: WebRTCPeer) => void;
+    onDataChannelStateChange: (state: boolean) => void;
     onKeyExchangeDone: () => void;
     onNegotiationNeeded: () => void;
     onError: (error: any) => void;
@@ -16,6 +18,8 @@ export enum WebRTCPacketType {
 
     MESSAGE = 0,
 }
+
+export const CHUNK_SIZE = 16 * 1024 * 1024;
 
 export interface WebRTCPacket {
     encrypted: boolean; // 1 bit
