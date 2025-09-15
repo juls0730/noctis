@@ -1,16 +1,19 @@
 import { writable, type Writable } from 'svelte/store';
-import { ConnectionState } from '../types/websocket';
+import { RoomConnectionState } from '../types/websocket';
 import { browser } from '$app/environment';
 
 export interface Room {
     id: string | null;
+    host: boolean | null;
+    RTCConnectionReady: boolean;
     participants: number;
-    connectionState: ConnectionState;
+    connectionState: RoomConnectionState;
 }
 
 export const room: Writable<Room> = writable({
     id: null,
+    host: null,
+    RTCConnectionReady: false,
     participants: 0,
-    connectionState: ConnectionState.DISCONNECTED,
-    key: null,
+    connectionState: RoomConnectionState.DISCONNECTED,
 });

@@ -2,6 +2,20 @@ import { WebSocketServer } from "ws";
 import { Socket, WebSocketMessageType, type WebSocketMessage } from "../src/types/websocket";
 import { LiveMap } from '../src/utils/liveMap.ts';
 
+const adjectives = ['swift', 'silent', 'hidden', 'clever', 'brave', 'sharp', 'shadow', 'crimson', 'bright', 'quiet', 'loud', 'happy', 'dark', 'evil', 'good', 'intelligent', 'lovely', 'mysterious', 'peaceful', 'powerful', 'pure', 'quiet', 'shiny', 'sleepy', 'strong', 'sweet', 'tall', 'warm', 'gentle', 'kind', 'nice', 'polite', 'rough', 'rude', 'scary', 'shy', 'silly', 'smart', 'strange', 'tough', 'ugly', 'vivid', 'wicked', 'wise', 'young', 'sleepy'];
+const nouns = ['fox', 'river', 'stone', 'cipher', 'link', 'comet', 'falcon', 'signal', 'anchor', 'spark', 'stone', 'comet', 'rocket', 'snake', 'snail', 'shark', 'elephant', 'cat', 'dog', 'whale', 'orca', 'cactus', 'flower', 'frog', 'toad', 'apple', 'strawberry', 'raspberry', 'lemon', 'bot', 'gopher', 'dinosaur', 'racoon', 'penguin', 'chameleon', 'atom', 'particle', 'witch', 'wizard', 'warlock', 'deer']
+
+enum ErrorCode {
+    ROOM_NOT_FOUND,
+}
+
+const errors = {
+    MALFORMED_MESSAGE: "Invalid message",
+    ROOM_NOT_FOUND: "Room does not exist",
+    ROOM_FULL: "Room is full",
+    UNKNOWN_MESSAGE_TYPE: "Unknown message type",
+}
+
 export class ServerRoom {
     private clients: Socket[] = [];
 
@@ -38,16 +52,28 @@ export class ServerRoom {
     }
 }
 
+function generateRoomName(): string {
+    const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const noun = nouns[Math.floor(Math.random() * nouns.length)];
+    return `${adj}-${noun}`;
+}
+
 const rooms = new LiveMap<string, ServerRoom>();
 
-async function createRoom(socket: Socket): Promise<string> {
-    let roomId = Math.random().toString(36).substring(2, 10);
+async function createRoom(socket: Socket, roomName?: string): Promise<string> {
+    if (!roomName) {
+        roomName = generateRoomName();
+    }
+
+    const num = Math.floor(Math.random() * 900) + 100;
+    const roomId = `${roomName}-${num}`;
+
     let room = rooms.set(roomId, new ServerRoom());
 
     socket.send({ type: WebSocketMessageType.ROOM_CREATED, data: room.key });
 
     try {
-        await joinRoom(room.key, socket);
+        await joinRoom(room.key, socket, true);
     } catch (e: any) {
         throw e;
     }
@@ -55,18 +81,18 @@ async function createRoom(socket: Socket): Promise<string> {
     return roomId;
 }
 
-async function joinRoom(roomId: string, socket: Socket): Promise<ServerRoom | undefined> {
+async function joinRoom(roomId: string, socket: Socket, initial?: boolean): Promise<ServerRoom | undefined> {
     let room = rooms.get(roomId);
     console.log(room?.length);
 
     // should be unreachable
     if (!room) {
-        socket.send({ type: WebSocketMessageType.ERROR, data: `Room ${roomId} does not exist` });
+        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
         return undefined;
     }
 
     if (room.length == 2) {
-        socket.send({ type: WebSocketMessageType.ERROR, data: "Room is full" });
+        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_FULL });
         return undefined;
     }
 
@@ -93,6 +119,9 @@ async function joinRoom(roomId: string, socket: Socket): Promise<ServerRoom | un
         room.set(room.filter(client => client.ws !== ev.target));
     });
 
+    if (!initial) {
+        socket.send({ type: WebSocketMessageType.ROOM_JOINED, roomId: roomId, participants: room.length });
+    }
     // TODO: consider letting rooms get larger than 2 clients
     if (room.length == 2) {
         room.forEachClient(client => client.send({ type: WebSocketMessageType.ROOM_READY, data: { isInitiator: client !== socket } }));
@@ -109,7 +138,7 @@ function leaveRoom(roomId: string, socket: Socket): ServerRoom | undefined {
 
     // should be unreachable
     if (!room) {
-        socket.send({ type: WebSocketMessageType.ERROR, data: `Room ${roomId} does not exist` });
+        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
         return undefined;
     }
 
@@ -156,7 +185,7 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
             if (message === undefined) {
                 console.log("Received non-JSON message:", event);
                 // If the message is not JSON, send an error message
-                socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid message' });
+                socket.send({ type: WebSocketMessageType.ERROR, data: errors.MALFORMED_MESSAGE });
                 return;
             }
 
@@ -166,7 +195,17 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                 case WebSocketMessageType.CREATE_ROOM:
                     // else, create a new room
                     try {
-                        await createRoom(socket);
+                        if (message.roomName) {
+                            // sanitize the room name
+                            message.roomName = message.roomName.toLowerCase()
+                                .replace(/\s+/g, '-') // Replace spaces with -
+                                .replace(/[^\w-]+/g, '') // Remove all non-word chars
+                                .replace(/--+/g, '-') // Replace multiple - with single -
+                                .replace(/^-+/, '') // Trim - from start of text
+                                .replace(/-+$/, ''); // Trim - from end of text
+                        }
+
+                        await createRoom(socket, message.roomName);
                     } catch (e: any) {
                         socket.send({ type: WebSocketMessageType.ERROR, data: e.message });
                         throw e;
@@ -174,29 +213,27 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                     break;
                 case WebSocketMessageType.JOIN_ROOM:
                     if (!message.roomId) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid message' });
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MALFORMED_MESSAGE });
                         return;
                     }
 
                     if (rooms.get(message.roomId) == undefined) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid roomId' });
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
                         return;
                     }
 
                     room = await joinRoom(message.roomId, socket);
                     if (!room) return;
 
-                    // the client is now in the room and the peer knows about it
-                    socket.send({ type: WebSocketMessageType.ROOM_JOINED, roomId: message.roomId, participants: room.length });
                     break;
                 case WebSocketMessageType.LEAVE_ROOM:
                     if (!message.roomId) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid message' });
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MALFORMED_MESSAGE });
                         return;
                     }
 
                     if (rooms.get(message.roomId) == undefined) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: 'Invalid roomId' });
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
                         return;
                     }
 
@@ -220,7 +257,7 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                     break;
                 default:
                     console.warn(`Unknown message type: ${message.type}`);
-                    socket.send({ type: WebSocketMessageType.ERROR, data: 'Unknown message type' });
+                    socket.send({ type: WebSocketMessageType.ERROR, data: errors.UNKNOWN_MESSAGE_TYPE });
                     break;
             }
         });

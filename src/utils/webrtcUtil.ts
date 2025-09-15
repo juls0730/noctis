@@ -2,11 +2,12 @@ import { writable, get, type Writable } from "svelte/store";
 import { WebRTCPeer } from "$lib/webrtc";
 import { CHUNK_SIZE, WebRTCPacketType } from "../types/webrtc";
 import { room } from "../stores/roomStore";
-import { ConnectionState, type Room } from "../types/websocket";
+import { RoomConnectionState, type Room } from "../types/websocket";
 import { advertisedOffers, fileRequestIds, messages, receivedOffers } from "../stores/messageStore";
 import { MessageType, type Message } from "../types/message";
 import { WebSocketMessageType, type WebSocketMessage } from "../types/websocket";
 import { WebBuffer } from "./buffer";
+import { goto } from "$app/navigation";
 
 export const error: Writable<string | null> = writable(null);
 export let peer: Writable<WebRTCPeer | null> = writable(null);
@@ -255,7 +256,8 @@ export async function handleMessage(event: MessageEvent) {
     switch (message.type) {
         case WebSocketMessageType.ROOM_CREATED:
             console.log("Room created:", message.data);
-            room.update((room) => ({ ...room, id: message.data, connectionState: ConnectionState.CONNECTED, participants: 1 }));
+            room.set({ id: message.data, host: true, RTCConnectionReady: false, connectionState: RoomConnectionState.CONNECTED, participants: 1 });
+            goto(`/${message.data}`);
             return;
         case WebSocketMessageType.JOIN_ROOM:
             console.log("new client joined room");
@@ -263,7 +265,8 @@ export async function handleMessage(event: MessageEvent) {
             return;
         case WebSocketMessageType.ROOM_JOINED:
             // TODO: if a client disconnects, we need to resync the room state
-            room.update((room) => ({ ...room, connectionState: ConnectionState.CONNECTED, participants: message.participants }));
+
+            room.set({ host: false, id: message.roomId, RTCConnectionReady: false, connectionState: RoomConnectionState.CONNECTED, participants: message.participants });
             console.log("Joined room");
             return;
         case WebSocketMessageType.ROOM_LEFT:
@@ -281,6 +284,8 @@ export async function handleMessage(event: MessageEvent) {
                 console.error("Room not set");
                 return;
             }
+
+            room.update(r => ({ ...r, RTCConnectionReady: true }));
 
             console.log("Creating peer");
             peer.set(new WebRTCPeer(

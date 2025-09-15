@@ -1,4 +1,4 @@
-export enum ConnectionState {
+export enum RoomConnectionState {
     CONNECTING,
     RECONNECTING,
     CONNECTED,
@@ -8,7 +8,7 @@ export enum ConnectionState {
 export interface Room {
     id: string | null;
     participants: number;
-    connectionState: ConnectionState;
+    connectionState: RoomConnectionState;
 }
 
 export enum WebSocketMessageType {
@@ -51,6 +51,7 @@ interface ErrorMessage {
 
 interface CreateRoomMessage {
     type: WebSocketMessageType.CREATE_ROOM;
+    roomName?: string;
 }
 
 interface JoinRoomMessage {
@@ -129,9 +130,14 @@ export class Socket {
             console.log("WebSocket opened");
         });
 
+
         this.addEventListener = this.ws.addEventListener.bind(this.ws);
         this.removeEventListener = this.ws.removeEventListener.bind(this.ws);
         this.close = this.ws.close.bind(this.ws);
+    }
+
+    get readyState(): number {
+        return this.ws.readyState;
     }
 
     public send(message: WebSocketMessage) {

@@ -1,7 +1,6 @@
 <script lang="ts">
     import { derived, writable, type Writable } from "svelte/store";
-    // import { room } from "../stores/roomStore";
-    import { webSocketConnected, ws } from "../stores/websocketStore";
+    import { WebsocketConnectionState, ws } from "../stores/websocketStore";
     import {
         isRTCConnected,
         dataChannelReady,
@@ -15,7 +14,7 @@
         receivedOffers,
     } from "../stores/messageStore";
     import { WebRTCPacketType } from "../types/webrtc";
-    import { ConnectionState, type Room } from "../types/websocket";
+    import { RoomConnectionState, type Room } from "../types/websocket";
     import { MessageType } from "../types/message";
     import { fade } from "svelte/transition";
     import { WebBuffer } from "../utils/buffer";
@@ -26,7 +25,7 @@
     let initialConnectionCompleteCount = writable(0);
     let initialConnectionComplete = derived(
         initialConnectionCompleteCount,
-        (value) => value === 3,
+        (value) => value >= 3,
     );
 
     // TODO: is this the most elegant way to do this?
@@ -224,21 +223,19 @@
 
 <p>
     {$room?.id}
-    ({$room?.participants}) - {$room?.connectionState} - {$webSocketConnected}
+    ({$room?.participants}) - {$room?.connectionState} - {$ws.status}
     - Initial connection {$initialConnectionComplete
         ? "complete"
         : "incomplete"}
 </p>
 
 <!-- If we are in a room, connected to the websocket server, and have been informed that we are connected to the room -->
-{#if ($room !== null && $webSocketConnected === true && $room.connectionState === ConnectionState.CONNECTED) || $room.connectionState === ConnectionState.RECONNECTING}
-    <div
-        class="flex flex-col sm:max-w-4/5 lg:max-w-3/5 min-h-[calc(5/12_*_100vh)]"
-    >
+{#if ($room !== null && $ws.status === WebsocketConnectionState.CONNECTED && $room.connectionState === RoomConnectionState.CONNECTED) || $room.connectionState === RoomConnectionState.RECONNECTING}
+    <div class="flex flex-col w-full min-h-[calc(5/12_*_100vh)]">
         <div
-            class="flex-grow flex flex-col overflow-y-auto mb-4 p-2 bg-gray-800 rounded relative whitespace-break-spaces wrap-anywhere"
+            class="flex-grow flex flex-col overflow-y-auto mb-4 p-2 bg-surface rounded relative whitespace-break-spaces wrap-anywhere"
         >
-            {#if !$initialConnectionComplete || $room.connectionState === ConnectionState.RECONNECTING || $room.participants !== 2 || $dataChannelReady === false || !$canCloseLoadingOverlay}
+            {#if !$initialConnectionComplete || $room.connectionState === RoomConnectionState.RECONNECTING || $room.participants !== 2 || $dataChannelReady === false || !$canCloseLoadingOverlay}
                 <div
                     transition:fade={{ duration: 300 }}
                     class="absolute top-0 left-0 bottom-0 right-0 flex justify-center items-center flex-col bg-black/55 backdrop-blur-md z-10 text-center"
@@ -249,23 +246,24 @@
                         <p>Establishing data channel...</p>
                     {:else if !$keyExchangeDone}
                         <p>Establishing a secure connection with the peer...</p>
-                    {:else if $room.connectionState === ConnectionState.RECONNECTING}
+                    {:else if $room.connectionState === RoomConnectionState.RECONNECTING}
                         <p>
                             Disconnect from peer, attempting to reconnecting...
                         </p>
                     {:else if $room.participants !== 2 || $dataChannelReady === false}
                         <p>
                             Peer has disconnected, waiting for other peer to
-                            reconnect...
+                            <span>reconnect...</span>
                         </p>
                     {:else}
                         <p>
+                            <!-- fucking completely stupid shit I have to do because svelte FORCES these to be broken into two lines, and for some reason it just puts all of the whitespace at the beginning of the line in the string, so it looks unbelievably stupid -->
                             Successfully established a secure connection to
-                            peer!
+                            <span>peer!</span>
                         </p>
                     {/if}
                     <div class="mt-2">
-                        {#if !$keyExchangeDone || $room.participants !== 2 || $dataChannelReady === false || $room.connectionState === ConnectionState.RECONNECTING}
+                        {#if !$keyExchangeDone || $room.participants !== 2 || $dataChannelReady === false || $room.connectionState === RoomConnectionState.RECONNECTING}
                             <!-- loading spinner -->
                             <svg
                                 class="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
@@ -326,12 +324,12 @@
                                 </p>
                             {/if}
                             <div
-                                class="flex flex-col p-2 relative w-8/12 bg-gray-600 rounded"
+                                class="flex flex-col p-2 relative w-8/12 bg-primary/50 rounded"
                             >
-                                <h2 class="text-lg font-semibold my-1">
+                                <h3 class="font-semibold">
                                     {msg.data.fileName}
-                                </h2>
-                                <p class="text-sm">
+                                </h3>
+                                <p class="text-sm text-paragraph-muted">
                                     {msg.data.fileSize} bytes
                                 </p>
                                 <!-- as the initiator, we cant send ourselves a file -->
@@ -339,7 +337,7 @@
                                     <button
                                         onclick={() =>
                                             downloadFile(msg.data.id)}
-                                        class="absolute right-2 bottom-2 p-1 border border-gray-500 text-gray-100 hover:bg-gray-800/70 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                                        class="absolute right-2 bottom-2 p-1 border border-[#2c3444]/80 text-paragraph hover:bg-[#1D1C1F]/60 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                                     >
                                         <svg
                                             xmlns="http://www.w3.org/2000/svg"
@@ -373,12 +371,12 @@
         />
         <div class="flex gap-2 w-full flex-row">
             <div
-                class="border rounded border-gray-600 flex-grow flex flex-col bg-gray-700"
+                class="border rounded border-[#2c3444] focus-within:border-[#404c63] transition-colors flex-grow flex flex-col bg-[#232b3e]"
             >
                 {#if $inputFile}
                     <div class="flex flex-row gap-2 p-2">
                         <div
-                            class="p-2 flex flex-col gap-2 w-48 border rounded-md border-gray-600 relative"
+                            class="p-2 flex flex-col gap-2 w-48 border rounded-md border-[#2c3444] relative"
                         >
                             <div class="w-full flex justify-center">
                                 <svg
@@ -410,7 +408,7 @@
                                 onclick={() => {
                                     $inputFile = null;
                                 }}
-                                class="absolute right-2 top-2 p-1 border border-gray-600 text-gray-100 hover:bg-gray-800/70 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                                class="absolute right-2 top-2 p-1 border border-[#2c3444] text-paragraph hover:bg-surface/70 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                             >
                                 <svg
                                     xmlns="http://www.w3.org/2000/svg"
@@ -429,11 +427,9 @@
                             </button>
                         </div>
                     </div>
-                    <hr class="border-gray-600" />
+                    <hr class="border-[#2c3444]" />
                 {/if}
-                <div
-                    class="flex flex-row focus-within:ring-2 focus-within:ring-blue-500 rounded"
-                >
+                <div class="flex flex-row rounded">
                     <textarea
                         bind:value={$inputMessage}
                         cols="1"
@@ -451,9 +447,9 @@
                             !$dataChannelReady ||
                             !$keyExchangeDone ||
                             $room.connectionState ===
-                                ConnectionState.RECONNECTING}
+                                RoomConnectionState.RECONNECTING}
                         placeholder="Type your message..."
-                        class="flex-grow p-2 bg-gray-700 rounded text-gray-100 placeholder-gray-400 min-h-12
+                        class="placeholder:text-paragraph-muted flex-grow p-2 bg-[#232b3e] rounded min-h-12
             focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-8"
                     ></textarea>
                     <div class="flex flex-row gap-2 p-2 h-fit mt-auto">
@@ -463,9 +459,9 @@
                                 !$dataChannelReady ||
                                 !$keyExchangeDone ||
                                 $room.connectionState ===
-                                    ConnectionState.RECONNECTING}
+                                    RoomConnectionState.RECONNECTING}
                             aria-label="Pick file"
-                            class="not-disabled:hover:bg-gray-800/70 h-fit p-1 text-gray-100 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                            class="not-disabled:hover:bg-primary/50 h-fit p-1 text-paragraph transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                         >
                             <svg
                                 xmlns="http://www.w3.org/2000/svg"
@@ -488,8 +484,8 @@
                                 !$dataChannelReady ||
                                 !$keyExchangeDone ||
                                 $room.connectionState ===
-                                    ConnectionState.RECONNECTING}
-                            class="not-disabled:hover:bg-gray-800/70 h-fit p-1 text-gray-100 transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                                    RoomConnectionState.RECONNECTING}
+                            class="not-disabled:hover:bg-primary/50 h-fit p-1 text-paragraph transition-colors rounded disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                         >
                             <svg
                                 xmlns="http://www.w3.org/2000/svg"
@@ -512,9 +508,3 @@
         </div>
     </div>
 {/if}
-
-<button
-    onclick={() => {
-        $ws.close();
-    }}>Simulate disconnect</button
->

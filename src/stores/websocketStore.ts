@@ -1,55 +1,105 @@
-import { get, writable } from 'svelte/store';
+import { get, writable, type Readable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { room } from './roomStore';
-import { ConnectionState, Socket, WebSocketMessageType } from '../types/websocket';
+import { Socket, type WebSocketMessage } from '../types/websocket';
+import { handleMessage } from '../utils/webrtcUtil';
 
-let socket: Socket | null = null;
-export const webSocketConnected = writable(false);
-
-function createSocket(): Socket {
-    if (!browser) {
-        // this only occurs on the server, which we dont care about because its not a client that can actually connect to the websocket server
-        // @ts-ignore
-        return null;
-    }
-
-    if (socket) {
-        return socket;
-    }
-
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    socket = new Socket(new WebSocket(`${protocol}//${location.host}/`));
-
-    socket.addEventListener('open', () => {
-        webSocketConnected.set(true);
-        console.log('Connected to websocket server');
-    });
-
-    socket.addEventListener('close', () => {
-        // TODO: massively rework the reconnection logic, currently it only works if one client disconnects, if the
-        // TODO: other client disconnects after the other client has diconnected at least once, everything explodes
-        if (get(webSocketConnected) && get(room)?.connectionState === ConnectionState.CONNECTED) {
-            room.update((room) => ({ ...room, connectionState: ConnectionState.RECONNECTING }));
-
-            setTimeout(() => {
-                ws.set(createSocket());
-
-                // attempt to rejoin the room if we were previously connected
-                get(ws).addEventListener('open', () => {
-                    let oldRoomId = get(room)?.id;
-                    if (oldRoomId) {
-                        get(ws).send({ type: WebSocketMessageType.JOIN_ROOM, roomId: oldRoomId });
-                        room.update((room) => ({ ...room, connectionState: ConnectionState.CONNECTED }));
-                    }
-                });
-            }, 1000);
-        }
-        webSocketConnected.set(false);
-        socket = null;
-        console.log('Disconnected from websocket server, reconnecting...');
-    });
-
-    return socket;
+export enum WebsocketConnectionState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    RECONNECTING
 }
 
-export const ws = writable(createSocket());
+interface WebSocketStoreValue {
+    status: WebsocketConnectionState;
+    socket: Socket | null;
+}
+
+export type MessageHandler = (event: MessageEvent) => void;
+
+interface WebSocketStore extends Readable<WebSocketStoreValue> {
+    connect: () => void;
+    disconnect: () => void;
+    send: (message: WebSocketMessage) => void;
+}
+
+// TODO: handle reconnection logic to room elsewhere (not implemented here)
+function createWebSocketStore(messageHandler: MessageHandler): WebSocketStore {
+    const { subscribe, set, update } = writable<WebSocketStoreValue>({ status: WebsocketConnectionState.DISCONNECTED, socket: null });
+
+    let reconnectTimeout: NodeJS.Timeout | null = null;
+    let reconnectAttempts = 0;
+
+    const send = (message: WebSocketMessage) => {
+        let currentState = get({ subscribe });
+        if (currentState.socket?.readyState === WebSocket.OPEN) {
+            currentState.socket.send(message);
+        } else {
+            console.error("Socket not connected");
+        }
+    };
+
+    const disconnect = () => {
+        let currentState = get({ subscribe });
+        if (currentState.socket) {
+            currentState.socket.close();
+            set({ status: WebsocketConnectionState.DISCONNECTED, socket: null });
+        }
+    };
+
+    const connect = () => {
+        if (!browser) {
+            return;
+        }
+
+        const currentState = get({ subscribe });
+        if (currentState.socket || currentState.status === WebsocketConnectionState.CONNECTING) {
+            // already connected/connecting
+            return;
+        }
+
+        update(s => ({ ...s, status: WebsocketConnectionState.CONNECTING }));
+
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new Socket(new WebSocket(`${protocol}//${location.host}/`));
+
+        socket.addEventListener('open', () => {
+            console.log('Connected to websocket server');
+            reconnectAttempts = 0;
+            update(s => ({ ...s, status: WebsocketConnectionState.CONNECTED, socket }));
+        });
+
+        socket.addEventListener('message', messageHandler);
+
+        socket.addEventListener('close', () => {
+            console.log('Disconnected from websocket server,');
+            update(s => ({ ...s, socket: null }));
+
+            // exponential backoff
+            const timeout = Math.min(Math.pow(2, reconnectAttempts) * 1000, 30000);
+            reconnectAttempts++;
+
+            console.log(`Reconnecting in ${timeout / 1000}s...`);
+            update(s => ({ ...s, status: WebsocketConnectionState.RECONNECTING }));
+
+            reconnectTimeout = setTimeout(() => {
+                connect();
+            }, timeout);
+        });
+
+        socket.addEventListener('error', () => {
+            console.error('Error connecting to websocket server');
+            socket.close();
+            // close will trigger a reconnect
+        });
+    };
+
+    return {
+        subscribe,
+        connect,
+        disconnect,
+        send,
+    };
+}
+
+export const ws = createWebSocketStore(handleMessage);

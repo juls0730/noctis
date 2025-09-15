@@ -1,10 +1,11 @@
-# Wormhole
-(needs a different name I think because I dont want to confuse it with wormhole.app)
+# Noctis
 
-A peer-to-peer encrypted file sharing app.
+Noctis /ˈnɑktɪs/ *adjective* of the night
+
+A peer-to-peer end-to-end encrypted chat app.
 
 ## Features
-- E2E communication
+- E2EE communication
 - P2P file sharing
 - P2P chat
 

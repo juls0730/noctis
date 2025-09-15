@@ -1,10 +1,9 @@
 
-import { get } from 'svelte/store';
 import { ws } from '../stores/websocketStore';
 import { WebSocketMessageType } from '../types/websocket';
 import { WebRTCPacketType, type WebRTCPeerCallbacks } from '../types/webrtc';
 import { browser } from '$app/environment';
-import { createApplicationMessage, createCommit, createGroup, decodeMlsMessage, defaultCapabilities, defaultLifetime, emptyPskIndex, encodeMlsMessage, generateKeyPackage, getCiphersuiteFromName, getCiphersuiteImpl, joinGroup, processPrivateMessage, type CiphersuiteImpl, type ClientState, type Credential, type GroupContext, type KeyPackage, type PrivateKeyPackage, type Proposal } from 'ts-mls';
+import { createApplicationMessage, createCommit, createGroup, decodeMlsMessage, defaultCapabilities, defaultLifetime, emptyPskIndex, encodeMlsMessage, generateKeyPackage, getCiphersuiteFromName, getCiphersuiteImpl, joinGroup, processPrivateMessage, type CiphersuiteImpl, type ClientState, type Credential, type KeyPackage, type PrivateKeyPackage, type Proposal } from 'ts-mls';
 
 export class WebRTCPeer {
     private peer: RTCPeerConnection | null = null;
@@ -35,7 +34,7 @@ export class WebRTCPeer {
     }
 
     private sendIceCandidate(candidate: RTCIceCandidate) {
-        get(ws).send({
+        ws.send({
             type: WebSocketMessageType.WEBRTC_ICE_CANDIDATE,
             data: {
                 roomId: this.roomId,
@@ -261,7 +260,7 @@ export class WebRTCPeer {
 
             await this.peer.setLocalDescription(offer)
 
-            get(ws).send({
+            ws.send({
                 type: WebSocketMessageType.WEBRTC_OFFER,
                 data: {
                     roomId: this.roomId,
@@ -295,7 +294,7 @@ export class WebRTCPeer {
 
             console.log("Sending answer", answer);
 
-            get(ws).send({
+            ws.send({
                 type: WebSocketMessageType.WERTC_ANSWER,
                 data: {
                     roomId: this.roomId,

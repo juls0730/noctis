@@ -1,9 +1,51 @@
 @import 'tailwindcss';
 
-body, html {
-    @apply bg-neutral-950 text-white font-sans min-h-screen;
+@font-face {
+    font-family: "Instrument Sans";
+    src: url("/fonts/InstrumentSans-VariableFont_wdth,wght.woff2") format("woff2");
+    font-display: swap;
+}
+
+:root {
+    --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    --test: #00060d;
+}
+
+@theme {
+    --color-accent: #00e0b8;
+    --color-surface: #0f1626;
+    --color-paragraph: #e0e0e0;
+    --color-paragraph-muted: #8a94a6;
+    --color-primary: #00060d;
+}
+
+body,
+html {
+    @apply bg-primary font-sans min-h-screen text-paragraph;
+}
+
+h1,
+h2,
+h3 {
+    color: #FFF;
+    line-height: 1.2;
+    margin-bottom: 1rem;
+}
+
+h1 {
+    font-size: 3rem;
+}
+
+h2 {
+    font-size: 2.25rem;
+    text-align: center;
+}
+
+h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
 }
 
 a {
-    @apply text-pink-600 underline hover:no-underline;
+    @apply text-accent underline hover:no-underline;
 }
