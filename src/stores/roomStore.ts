@@ -1,5 +1,5 @@
 import { writable, type Writable } from 'svelte/store';
-import { RoomConnectionState } from '../types/websocket';
+import { RoomConnectionState } from '$types/websocket';
 import { browser } from '$app/environment';
 
 export interface Room {

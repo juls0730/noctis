@@ -1,5 +1,5 @@
 import { WebSocketServer } from "ws";
-import { confgiureWebsocketServer } from '../server/websocketHandler.ts';
+import { confgiureWebsocketServer } from './lib/server/websocketHandler.ts';
 
 import type { ViteDevServer } from "vite";
 

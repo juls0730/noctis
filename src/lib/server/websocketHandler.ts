@@ -1,16 +1,15 @@
 import { WebSocketServer } from "ws";
-import { Socket, WebSocketMessageType, type WebSocketMessage } from "../src/types/websocket";
-import { LiveMap } from '../src/utils/liveMap.ts';
+import { Socket, WebSocketMessageType, type WebSocketMessage } from "../../types/websocket.ts";
+import { LiveMap } from '../liveMap.ts';
+import { hashStringSHA256 } from "../powUtil.ts";
 
 const adjectives = ['swift', 'silent', 'hidden', 'clever', 'brave', 'sharp', 'shadow', 'crimson', 'bright', 'quiet', 'loud', 'happy', 'dark', 'evil', 'good', 'intelligent', 'lovely', 'mysterious', 'peaceful', 'powerful', 'pure', 'quiet', 'shiny', 'sleepy', 'strong', 'sweet', 'tall', 'warm', 'gentle', 'kind', 'nice', 'polite', 'rough', 'rude', 'scary', 'shy', 'silly', 'smart', 'strange', 'tough', 'ugly', 'vivid', 'wicked', 'wise', 'young', 'sleepy'];
 const nouns = ['fox', 'river', 'stone', 'cipher', 'link', 'comet', 'falcon', 'signal', 'anchor', 'spark', 'stone', 'comet', 'rocket', 'snake', 'snail', 'shark', 'elephant', 'cat', 'dog', 'whale', 'orca', 'cactus', 'flower', 'frog', 'toad', 'apple', 'strawberry', 'raspberry', 'lemon', 'bot', 'gopher', 'dinosaur', 'racoon', 'penguin', 'chameleon', 'atom', 'particle', 'witch', 'wizard', 'warlock', 'deer']
 
-enum ErrorCode {
-    ROOM_NOT_FOUND,
-}
-
 const errors = {
     MALFORMED_MESSAGE: "Invalid message",
+    INVALID_CHALLENGE: "Invalid challenge",
+    MISSING_DATA: "One or more required fields are missing",
     ROOM_NOT_FOUND: "Room does not exist",
     ROOM_FULL: "Room is full",
     UNKNOWN_MESSAGE_TYPE: "Unknown message type",
@@ -106,13 +105,13 @@ async function joinRoom(roomId: string, socket: Socket, initial?: boolean): Prom
         // for some reason, when you filter the array when the length is 1 it stays at 1, but we *know* that if its 1
         // then when this client disconnects, the room should be deleted since the room is empty
         if (room.length === 1) {
-            // give a 5 second grace period before deleting the room
+            // give a 60 second grace period before deleting the room
             setTimeout(() => {
                 if (rooms.get(roomId)?.length === 1) {
                     console.log("Room is empty, deleting");
                     deleteRoom(roomId);
                 }
-            }, 5000)
+            }, 60000)
             return;
         }
 
@@ -130,6 +129,39 @@ async function joinRoom(roomId: string, socket: Socket, initial?: boolean): Prom
     console.log("Room created:", roomId, room.length);
 
     return room;
+}
+
+// How many leading zeros are required to be considered solved
+// In my testing, 2 seems to be too easy, and 4 seems to be too hard, so I'm going with 3
+const CHALLENGE_DIFFICULTY = 3;
+// challenges that have yet to be attached to a challenged request
+const outstandingChallenges = new Map<string, NodeJS.Timeout>();
+
+function generateChallenge(): string {
+    let challenge = Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
+    // provide 90 seconds to solve the challenge
+    outstandingChallenges.set(challenge, setTimeout(() => {
+        console.log("Challenge timed out:", challenge);
+        outstandingChallenges.delete(challenge);
+    }, 90000));
+
+    return challenge;
+}
+
+async function validateChallenge(challenge: string, nonce: string, additionalData: string = ""): Promise<boolean> {
+    if (!outstandingChallenges.has(challenge)) {
+        return false;
+    }
+
+    let hash = await hashStringSHA256(`${additionalData}${challenge}${nonce}`);
+    let result = hash.startsWith('0'.repeat(CHALLENGE_DIFFICULTY));
+    if (result) {
+        console.log("Challenge solved:", challenge);
+        clearTimeout(outstandingChallenges.get(challenge)!);
+        outstandingChallenges.delete(challenge);
+    }
+
+    return result;
 }
 
 function leaveRoom(roomId: string, socket: Socket): ServerRoom | undefined {
@@ -189,10 +221,22 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                 return;
             }
 
+            console.log("Received message:", message);
+
             let room: ServerRoom | undefined = undefined;
 
             switch (message.type) {
                 case WebSocketMessageType.CREATE_ROOM:
+                    if (!message.nonce || !message.challenge) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MISSING_DATA });
+                        return;
+                    }
+
+                    if (!await validateChallenge(message.challenge, message.nonce)) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.INVALID_CHALLENGE });
+                        return;
+                    }
+
                     // else, create a new room
                     try {
                         if (message.roomName) {
@@ -212,8 +256,13 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                     }
                     break;
                 case WebSocketMessageType.JOIN_ROOM:
-                    if (!message.roomId) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MALFORMED_MESSAGE });
+                    if (!message.roomId || !message.nonce || !message.challenge) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MISSING_DATA });
+                        return;
+                    }
+
+                    if (!await validateChallenge(message.challenge, message.nonce, message.roomId)) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.INVALID_CHALLENGE });
                         return;
                     }
 
@@ -237,9 +286,27 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                         return;
                     }
 
-                    room = await leaveRoom(message.roomId, socket);
+                    room = leaveRoom(message.roomId, socket);
                     if (!room) return;
 
+                    break;
+                case WebSocketMessageType.CHECK_ROOM_EXISTS:
+                    if (!message.roomId || !message.nonce || !message.challenge) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MISSING_DATA });
+                        return;
+                    }
+
+                    if (!await validateChallenge(message.challenge, message.nonce, message.roomId)) {
+                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.INVALID_CHALLENGE });
+                        return;
+                    }
+
+                    socket.send({ type: WebSocketMessageType.ROOM_STATUS, roomId: message.roomId, status: rooms.get(message.roomId) ? 'found' : 'not-found' });
+                    break;
+                case WebSocketMessageType.REQUEST_CHALLENGE:
+                    let challenge = generateChallenge();
+
+                    socket.send({ type: WebSocketMessageType.CHALLENGE, challenge, difficulty: CHALLENGE_DIFFICULTY });
                     break;
                 case WebSocketMessageType.WEBRTC_OFFER:
                 case WebSocketMessageType.WERTC_ANSWER:

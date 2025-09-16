@@ -1,23 +1,23 @@
 <script lang="ts">
     import { derived, writable, type Writable } from "svelte/store";
-    import { WebsocketConnectionState, ws } from "../stores/websocketStore";
+    import { WebsocketConnectionState, ws } from "$stores/websocketStore";
     import {
         isRTCConnected,
         dataChannelReady,
         peer,
         keyExchangeDone,
-    } from "../utils/webrtcUtil";
+    } from "$lib/webrtcUtil";
     import {
         advertisedOffers,
         fileRequestIds,
         messages,
         receivedOffers,
-    } from "../stores/messageStore";
-    import { WebRTCPacketType } from "../types/webrtc";
-    import { RoomConnectionState, type Room } from "../types/websocket";
-    import { MessageType } from "../types/message";
+    } from "$stores/messageStore";
+    import { WebRTCPacketType } from "$types/webrtc";
+    import { RoomConnectionState, type Room } from "$types/websocket";
+    import { MessageType } from "$types/message";
     import { fade } from "svelte/transition";
-    import { WebBuffer } from "../utils/buffer";
+    import { WebBuffer } from "../lib/buffer";
 
     let inputMessage: Writable<string> = writable("");
     let inputFile: Writable<FileList | null | undefined> = writable(null);

@@ -1,7 +1,7 @@
 
-import { ws } from '../stores/websocketStore';
-import { WebSocketMessageType } from '../types/websocket';
-import { WebRTCPacketType, type WebRTCPeerCallbacks } from '../types/webrtc';
+import { ws } from '$stores/websocketStore';
+import { WebSocketMessageType } from '$types/websocket';
+import { WebRTCPacketType, type WebRTCPeerCallbacks } from '$types/webrtc';
 import { browser } from '$app/environment';
 import { createApplicationMessage, createCommit, createGroup, decodeMlsMessage, defaultCapabilities, defaultLifetime, emptyPskIndex, encodeMlsMessage, generateKeyPackage, getCiphersuiteFromName, getCiphersuiteImpl, joinGroup, processPrivateMessage, type CiphersuiteImpl, type ClientState, type Credential, type KeyPackage, type PrivateKeyPackage, type Proposal } from 'ts-mls';
 

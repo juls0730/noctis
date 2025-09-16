@@ -1,8 +1,9 @@
 <script lang="ts">
-    import { ws } from "../stores/websocketStore";
-    import { WebSocketMessageType } from "../types/websocket";
+    import { WebsocketConnectionState, ws } from "$stores/websocketStore";
+    import { WebSocketMessageType } from "$types/websocket";
     import { writable, type Writable } from "svelte/store";
-    import LoadingSpinner from "../components/LoadingSpinner.svelte";
+    import LoadingSpinner from "$components/LoadingSpinner.svelte";
+    import { doChallenge } from "$lib/challenge";
 
     let roomName: Writable<string> = writable("");
     let roomLoading: Writable<boolean> = writable(false);
@@ -11,12 +12,20 @@
         roomLoading.set(true);
         let roomId = $roomName.trim() === "" ? undefined : $roomName.trim();
 
-        ws.send({
-            type: WebSocketMessageType.CREATE_ROOM,
-            roomName: roomId,
+        doChallenge().then(async (challengeResult) => {
+            if (!challengeResult) {
+                return;
+            }
+
+            ws.send({
+                type: WebSocketMessageType.CREATE_ROOM,
+                roomName: roomId,
+                nonce: challengeResult.nonce,
+                challenge: challengeResult.challenge,
+            });
+
+            console.log("Created room:", roomId);
         });
-        // todo: redirect to the room
-        console.log("Created room:", roomId);
     }
 
     let showRoomNameInput: Writable<boolean> = writable(false);
@@ -36,9 +45,15 @@
             <form class="flex flex-col gap-5" id="roomForm">
                 <button
                     onclick={createRoom}
-                    class="py-4 px-8 text-xl font-semibold bg-accent text-[#121826] rounded-lg cursor-pointer transition-[background-color,_translate,_box-shadow] ease-out duration-200 w-full inline-flex justify-center items-center gap-2.5 hover:bg-[#00f0c8] hover:-translate-y-1 hover:shadow-md shadow-accent/20"
+                    disabled={$ws.status !==
+                        WebsocketConnectionState.CONNECTED || $roomLoading}
+                    class="py-4 px-8 text-xl font-semibold bg-accent text-[#121826] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg cursor-pointer transition-[background-color,_translate,_box-shadow] ease-out duration-200 w-full inline-flex justify-center items-center gap-2.5 hover:bg-[#00f0c8] hover:-translate-y-1 hover:shadow-md shadow-accent/20"
                 >
-                    {#if $roomLoading}
+                    {#if $ws.status !== WebsocketConnectionState.CONNECTED}
+                        <span class="flex items-center"
+                            ><LoadingSpinner /> Connecting to server...</span
+                        >
+                    {:else if $roomLoading}
                         <span class="flex items-center"
                             ><LoadingSpinner /> Creating Room...</span
                         >
@@ -232,7 +247,7 @@
     </div>
 </section>
 
-<footer class="px-20 text-center border-t border-[#21293b]">
+<footer class="px-20 pt-3 text-center border-t border-[#21293b]">
     <div class="max-w-6xl px-10 mx-auto">
         <p>
             &copy; {new Date().getFullYear()} Noctis - MIT License

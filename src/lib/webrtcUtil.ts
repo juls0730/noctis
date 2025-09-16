@@ -1,11 +1,11 @@
 import { writable, get, type Writable } from "svelte/store";
 import { WebRTCPeer } from "$lib/webrtc";
-import { CHUNK_SIZE, WebRTCPacketType } from "../types/webrtc";
-import { room } from "../stores/roomStore";
-import { RoomConnectionState, type Room } from "../types/websocket";
-import { advertisedOffers, fileRequestIds, messages, receivedOffers } from "../stores/messageStore";
-import { MessageType, type Message } from "../types/message";
-import { WebSocketMessageType, type WebSocketMessage } from "../types/websocket";
+import { WebRTCPacketType } from "$types/webrtc";
+import { room } from "$stores/roomStore";
+import { RoomConnectionState, type Room } from "$types/websocket";
+import { advertisedOffers, fileRequestIds, messages, receivedOffers } from "$stores/messageStore";
+import { MessageType, type Message } from "$types/message";
+import { WebSocketMessageType, type WebSocketMessage } from "$types/websocket";
 import { WebBuffer } from "./buffer";
 import { goto } from "$app/navigation";
 
@@ -186,8 +186,10 @@ const callbacks = {
                 if (downloadStream === undefined) {
                     window.addEventListener("pagehide", onPageHide);
                     window.addEventListener("beforeunload", beforeUnload);
+
+                    // @ts-ignore
                     downloadStream = window.streamSaver.createWriteStream(file.name, { size: Number(file.size) });
-                    downloadWriter = downloadStream.getWriter();
+                    downloadWriter = downloadStream!.getWriter();
                 }
 
                 await downloadWriter!.write(new Uint8Array(messageData.read()));
@@ -249,6 +251,7 @@ const callbacks = {
     },
 };
 
+
 export async function handleMessage(event: MessageEvent) {
     console.log("Message received:", event.data, typeof event.data);
     const message: WebSocketMessage = JSON.parse(event.data);
@@ -299,7 +302,7 @@ export async function handleMessage(event: MessageEvent) {
     }
 
     if (!get(peer)) {
-        console.error("Unknown message type:", message.type);
+        console.debug("Unhandled message type:", message.type);
         return;
     }
 
@@ -322,7 +325,7 @@ export async function handleMessage(event: MessageEvent) {
             await get(peer)?.addIceCandidate(message.data.candidate);
             return;
         default:
-            console.warn(
+            console.debug(
                 `Unknown message type: ${message.type} from ${get(room).id}`,
             );
     }

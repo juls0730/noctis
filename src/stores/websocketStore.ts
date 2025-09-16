@@ -1,7 +1,7 @@
 import { get, writable, type Readable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { Socket, type WebSocketMessage } from '../types/websocket';
-import { handleMessage } from '../utils/webrtcUtil';
+import { Socket, WebSocketMessageType, type WebSocketMessage } from '$types/websocket';
+import { handleMessage } from '../lib/webrtcUtil';
 
 export enum WebsocketConnectionState {
     DISCONNECTED,
@@ -21,6 +21,7 @@ interface WebSocketStore extends Readable<WebSocketStoreValue> {
     connect: () => void;
     disconnect: () => void;
     send: (message: WebSocketMessage) => void;
+    handleEvent<T extends WebSocketMessageType>(messageType: T, func: (message: WebSocketMessage & { type: T }) => void): () => void;
 }
 
 // TODO: handle reconnection logic to room elsewhere (not implemented here)
@@ -94,11 +95,23 @@ function createWebSocketStore(messageHandler: MessageHandler): WebSocketStore {
         });
     };
 
+    function handleEvent<T extends WebSocketMessageType>(messageType: T, func: (message: WebSocketMessage & { type: T }) => void) {
+        let socket = get({ subscribe }).socket;
+        if (!socket) {
+            return () => { };
+        }
+
+        // TODO: why does the typescript compiler think this is invalid?
+        return socket.handleEvent<T>(messageType, func)
+    }
+
+
     return {
         subscribe,
         connect,
         disconnect,
         send,
+        handleEvent,
     };
 }
 

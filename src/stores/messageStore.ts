@@ -1,5 +1,5 @@
 import { writable, type Writable } from "svelte/store";
-import type { Message } from "../types/message";
+import type { Message } from "$types/message";
 
 export let messages: Writable<Message[]> = writable([]);
 export let advertisedOffers = writable(new Map<bigint, File>());

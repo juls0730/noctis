@@ -1,19 +1,23 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import { room } from "../../stores/roomStore";
-    import { ws } from "../../stores/websocketStore";
-    import { WebSocketMessageType } from "../../types/websocket";
-    import { dataChannelReady, error } from "../../utils/webrtcUtil";
+    import { room } from "$stores/roomStore";
+    import { WebsocketConnectionState, ws } from "$stores/websocketStore";
+    import { WebSocketMessageType } from "$types/websocket";
+    import { dataChannelReady, error } from "$lib/webrtcUtil";
     import { goto } from "$app/navigation";
-    import RtcMessage from "../../components/RTCMessage.svelte";
+    import RtcMessage from "$components/RTCMessage.svelte";
+    import { page } from "$app/state";
+    import LoadingSpinner from "$components/LoadingSpinner.svelte";
+    import { hashStringSHA256, solveChallenge } from "$lib/powUtil";
+    import { doChallenge } from "$lib/challenge";
+    const { roomId } = page.params;
 
-    let isHost = $room.host === true;
+    let isHost = $derived($room.host === true);
+    let roomExists: boolean | undefined = $state(undefined);
 
-    let awaitingJoinConfirmation = !isHost;
-    let roomLink = "";
-    let copyButtonText = "Copy Link";
-    export let data: { roomId: string };
-    const { roomId } = data;
+    let awaitingJoinConfirmation = $derived(!isHost);
+    let roomLink = $state("");
+    let copyButtonText = $state("Copy Link");
 
     onMount(() => {
         error.set(null);
@@ -30,12 +34,23 @@
         });
     }
 
-    function handleConfirmJoin() {
+    async function handleConfirmJoin() {
         awaitingJoinConfirmation = false;
+
+        if (!roomId) {
+            return;
+        }
+
+        let challengeResult = await doChallenge(roomId);
+        if (!challengeResult) {
+            return;
+        }
 
         ws.send({
             type: WebSocketMessageType.JOIN_ROOM,
-            roomId: roomId,
+            roomId: roomId!,
+            nonce: challengeResult.nonce,
+            challenge: challengeResult.challenge,
         });
     }
 
@@ -56,6 +71,42 @@
             window.location.href = "/";
         }
     }
+
+    ws.subscribe(async (newWs) => {
+        if (newWs.status === WebsocketConnectionState.CONNECTED) {
+            if (!awaitingJoinConfirmation) {
+                return;
+            }
+
+            if (!roomId) {
+                return;
+            }
+
+            let challengeResult = await doChallenge(roomId);
+
+            if (challengeResult) {
+                let unsubscribe = ws.handleEvent(
+                    WebSocketMessageType.ROOM_STATUS,
+                    (value) => {
+                        if (value.status === "found") {
+                            unsubscribe();
+                            roomExists = true;
+                        } else if (value.status === "not-found") {
+                            unsubscribe();
+                            roomExists = false;
+                        }
+                    },
+                );
+
+                ws.send({
+                    type: WebSocketMessageType.CHECK_ROOM_EXISTS,
+                    roomId: roomId,
+                    nonce: challengeResult.nonce,
+                    challenge: challengeResult.challenge,
+                });
+            }
+        }
+    });
 </script>
 
 <div class="max-w-6xl px-5 mx-auto flex flex-col items-center">
@@ -97,23 +148,41 @@
                 <RtcMessage {room} />
             {/if}
         {:else if awaitingJoinConfirmation}
-            <h2 class="text-3xl font-bold text-white mb-2">
-                You're invited to chat.
-            </h2>
-            <div class="flex flex-row gap-2">
-                <button
-                    onclick={handleConfirmJoin}
-                    class="bg-accent hover:bg-accent/80 active:bg-accent/60 cursor-pointer text-gray-900 font-bold py-2 px-4 rounded-md transition-colors whitespace-nowrap"
-                >
-                    Accept
-                </button>
-                <button
-                    onclick={handleDeclineJoin}
-                    class="bg-red-400 hover:bg-red-400/80 active:bg-red-400/60 cursor-pointer text-gray-900 font-bold py-2 px-4 rounded-md transition-colors whitespace-nowrap"
-                >
-                    Decline
-                </button>
-            </div>
+            {#if $ws.status !== WebsocketConnectionState.CONNECTED || roomExists === undefined}
+                <h2 class="text-3xl font-bold text-white mb-2">
+                    <span class="flex items-center"
+                        ><LoadingSpinner size="24" /> Connecting to server...</span
+                    >
+                </h2>
+                <p class="!text-paragraph">
+                    click <a href="/">here</a> to go back to the homepage
+                </p>
+            {:else if roomExists === false}
+                <h2 class="text-3xl font-bold text-white mb-2">
+                    That room does not exist.
+                </h2>
+                <p class="!text-paragraph">
+                    click <a href="/">here</a> to go back to the homepage
+                </p>
+            {:else}
+                <h2 class="text-3xl font-bold text-white mb-2">
+                    You're invited to chat.
+                </h2>
+                <div class="flex flex-row gap-2">
+                    <button
+                        onclick={handleConfirmJoin}
+                        class="bg-accent hover:bg-accent/80 active:bg-accent/60 cursor-pointer text-gray-900 font-bold py-2 px-4 rounded-md transition-colors whitespace-nowrap"
+                    >
+                        Accept
+                    </button>
+                    <button
+                        onclick={handleDeclineJoin}
+                        class="bg-red-400 hover:bg-red-400/80 active:bg-red-400/60 cursor-pointer text-gray-900 font-bold py-2 px-4 rounded-md transition-colors whitespace-nowrap"
+                    >
+                        Decline
+                    </button>
+                </div>
+            {/if}
         {:else}
             <RtcMessage {room} />
         {/if}

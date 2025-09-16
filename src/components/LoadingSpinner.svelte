@@ -1,5 +1,13 @@
+<script lang="ts">
+    let { size }: { size?: number } = $$props;
+    if (!size) {
+        size = 20;
+    }
+</script>
+
 <svg
-    class="animate-spin -ml-1 mr-3 h-5 w-5"
+    class="animate-spin -ml-1 mr-3"
+    style="width: {size}px; height: {size}px"
     xmlns="http://www.w3.org/2000/svg"
     fill="none"
     viewBox="0 0 24 24"

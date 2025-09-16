@@ -2,8 +2,8 @@
     import "../app.css";
     import favicon from "$lib/assets/favicon.svg";
     import { onDestroy, onMount } from "svelte";
-    import { WebsocketConnectionState, ws } from "../stores/websocketStore";
-    import { room } from "../stores/roomStore";
+    import { WebsocketConnectionState, ws } from "$stores/websocketStore";
+    import { room } from "$stores/roomStore";
 
     onMount(() => {
         ws.connect();
@@ -35,6 +35,12 @@
         crossorigin="anonymous"
         href="/fonts/InstrumentSans-VariableFont_wdth,wght.woff2"
     />
+    {#if process.env.NODE_ENV !== "production"}
+        <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+        <script>
+            eruda.init();
+        </script>
+    {/if}
     <script
         src="https://cdn.jsdelivr.net/npm/web-streams-polyfill@2.0.2/dist/ponyfill.min.js"
     ></script>
@@ -52,7 +58,7 @@
         </div>
         <nav>
             <a
-                href="https://github.com"
+                href="https://github.com/juls0730/noctis"
                 target="_blank"
                 rel="noopener noreferrer">GitHub</a
             >
