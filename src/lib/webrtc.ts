@@ -1,9 +1,9 @@
 
 import { ws } from '$stores/websocketStore';
-import { WebSocketMessageType } from '$types/websocket';
 import { WebRTCPacketType, type WebRTCPeerCallbacks } from '$types/webrtc';
 import { browser } from '$app/environment';
 import { createApplicationMessage, createCommit, createGroup, decodeMlsMessage, defaultCapabilities, defaultLifetime, emptyPskIndex, encodeMlsMessage, generateKeyPackage, getCiphersuiteFromName, getCiphersuiteImpl, joinGroup, processPrivateMessage, type CiphersuiteImpl, type ClientState, type Credential, type KeyPackage, type PrivateKeyPackage, type Proposal } from 'ts-mls';
+import { WebSocketWebRtcMessageType } from '$types/websocket';
 
 export class WebRTCPeer {
     private peer: RTCPeerConnection | null = null;
@@ -35,7 +35,7 @@ export class WebRTCPeer {
 
     private sendIceCandidate(candidate: RTCIceCandidate) {
         ws.send({
-            type: WebSocketMessageType.WEBRTC_ICE_CANDIDATE,
+            type: WebSocketWebRtcMessageType.ICE_CANDIDATE,
             data: {
                 roomId: this.roomId,
                 candidate: candidate,
@@ -261,7 +261,7 @@ export class WebRTCPeer {
             await this.peer.setLocalDescription(offer)
 
             ws.send({
-                type: WebSocketMessageType.WEBRTC_OFFER,
+                type: WebSocketWebRtcMessageType.OFFER,
                 data: {
                     roomId: this.roomId,
                     sdp: offer,
@@ -295,7 +295,7 @@ export class WebRTCPeer {
             console.log("Sending answer", answer);
 
             ws.send({
-                type: WebSocketMessageType.WERTC_ANSWER,
+                type: WebSocketWebRtcMessageType.ANSWER,
                 data: {
                     roomId: this.roomId,
                     sdp: answer,
@@ -353,7 +353,7 @@ export class WebRTCPeer {
         this.send(keyPackageMessageBuf, WebRTCPacketType.KEY_PACKAGE);
     }
 
-    public async send(data: ArrayBuffer, type: WebRTCPacketType) {
+    public async send(data: ArrayBufferLike, type: WebRTCPacketType) {
         console.log("Sending message of type", type, "with data", data);
 
         if (!this.dataChannel || this.dataChannel.readyState !== 'open') throw new Error('Data channel not initialized');

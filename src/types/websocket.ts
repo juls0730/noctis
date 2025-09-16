@@ -11,143 +11,187 @@ export interface Room {
     connectionState: RoomConnectionState;
 }
 
-export enum WebSocketMessageType {
-    // room messages
-    CREATE_ROOM = "create",
-    JOIN_ROOM = "join",
-    LEAVE_ROOM = "leave",
-    CHECK_ROOM_EXISTS = "check",
-    REQUEST_CHALLENGE = "request-challenge",
+export interface Challenge {
+    // the answer is the sha256(additionalData + target + nonce)
+    target: string;
+    nonce: string;
+}
 
-    // response messages
-    ROOM_CREATED = "created",
-    ROOM_JOINED = "joined",
-    ROOM_LEFT = "left",
-    ROOM_READY = "ready",
-    ROOM_STATUS = "status",
-    CHALLENGE = "challenge",
+export enum WebSocketRequestType {
+    CREATE_ROOM = "create-room",
+    ROOM_JOIN = "join-room",
+    ROOM_LEAVE = "leave-room",
+    ROOM_STATUS = "get-room-status",
+    CHALLENGE_REQUEST = "get-challenge",
+}
 
-    // webrtc messages
-    WEBRTC_OFFER = "offer",
-    WERTC_ANSWER = "answer",
-    WEBRTC_ICE_CANDIDATE = "ice-candidate",
+export enum WebSocketResponseType {
+    ROOM_CREATED = "room-created",
+    ROOM_JOINED = "room-joined",
+    ROOM_LEFT = "room-left",
+    ROOM_STATUS = "room-status",
+    CHALLENGE_RESPONSE = "challenge",
+}
 
+// messages sent to room participants providing information about the room
+export enum WebSocketRoomMessageType {
+    PARTICIPANT_LEFT = "peer-left",
+    ROOM_READY = "room-ready",
+    PARTICIPANT_JOINED = "peer-joined",
+}
+
+export enum WebSocketWebRtcMessageType {
+    OFFER = "offer",
+    ANSWER = "answer",
+    ICE_CANDIDATE = "ice-candidate",
+}
+
+export enum WebSocketErrorType {
     ERROR = "error",
 }
 
+export type WebSocketMessageType = WebSocketRequestType | WebSocketResponseType | WebSocketRoomMessageType | WebSocketWebRtcMessageType | WebSocketErrorType;
+
 // TODO: name the interfaces better
 export type WebSocketMessage =
-    | CreateRoomMessage
-    | JoinRoomMessage
-    | LeaveRoomMessage
-    | CheckRoomExistsMessage
-    | RequestChallengeMessage
-    | RoomCreatedMessage
-    | RoomJoinedMessage
-    | RoomLeftMessage
-    | RoomStatusMessage
+    // request messages
+    | CreateRoomRequest
+    | JoinRoomRequest
+    | LeaveRoomRequest
+    | RoomStatusRequest
+    | ChallengeRequest
+    // response messages
+    | RoomCreatedResponse
+    | RoomJoinedResponse
+    | RoomLeftResponse
+    | RoomStatusResponse
+    | ChallengeResponse
+    // room messages
+    | ParticipantJoinedMessage
+    | ParticipantLeftMessage
     | RoomReadyMessage
-    | ChallengeMessage
-    | OfferMessage
-    | AnswerMessage
-    | IceCandidateMessage
-    | ErrorMessage;
+    // webrtc messages
+    | WebRTCOfferMessage
+    | WebRTCAnswerMessage
+    | WebRTCIceCandidateMessage
+    // errors
+    | Error;
 
-interface ErrorMessage {
-    type: WebSocketMessageType.ERROR;
+interface Error {
+    type: WebSocketErrorType.ERROR;
     data: string;
 }
 
 // ====== Query Messages ======
-interface CreateRoomMessage {
-    type: WebSocketMessageType.CREATE_ROOM;
+interface CreateRoomRequest {
+    type: WebSocketRequestType.CREATE_ROOM;
     roomName?: string;
-    nonce: string;
-    challenge: string;
+    challenge: Challenge;
 }
 
-// TODO: this is used as a query message, but it's also used as a response message
-interface JoinRoomMessage {
-    type: WebSocketMessageType.JOIN_ROOM;
+interface JoinRoomRequest {
+    type: WebSocketRequestType.ROOM_JOIN;
     roomId: string;
-    nonce?: string;
-    challenge?: string;
+    challenge: Challenge;
 }
 
-interface LeaveRoomMessage {
-    type: WebSocketMessageType.LEAVE_ROOM;
+interface LeaveRoomRequest {
+    type: WebSocketRequestType.ROOM_LEAVE;
     roomId: string;
 }
 
-interface CheckRoomExistsMessage {
-    type: WebSocketMessageType.CHECK_ROOM_EXISTS;
-    // if sha256(roomId + challenge + nonce) has a certain number of leading zeros, then we can give the status to the user
+interface RoomStatusRequest {
+    type: WebSocketRequestType.ROOM_STATUS;
     roomId: string;
-    nonce: string;
-    challenge: string;
+    challenge: Challenge;
 }
 
-interface RequestChallengeMessage {
-    type: WebSocketMessageType.REQUEST_CHALLENGE;
+interface ChallengeRequest {
+    type: WebSocketRequestType.CHALLENGE_REQUEST;
 }
 
 // ====== Response Messages ======
-
-interface RoomCreatedMessage {
-    type: WebSocketMessageType.ROOM_CREATED;
+interface RoomCreatedResponse {
+    type: WebSocketResponseType.ROOM_CREATED;
     data: string;
 }
 
-interface RoomJoinedMessage {
-    type: WebSocketMessageType.ROOM_JOINED;
+interface RoomJoinedResponse {
+    type: WebSocketResponseType.ROOM_JOINED;
     roomId: string;
     participants: number;
 }
 
-interface RoomLeftMessage {
-    type: WebSocketMessageType.ROOM_LEFT;
+interface RoomLeftResponse {
+    type: WebSocketResponseType.ROOM_LEFT;
     roomId: string;
 }
 
-interface RoomStatusMessage {
-    type: WebSocketMessageType.ROOM_STATUS;
+interface RoomStatusRequest {
+    type: WebSocketRequestType.ROOM_STATUS;
     roomId: string;
-    status: 'found' | 'not-found';
+}
+
+export enum RoomStatusType {
+    OPEN = "open",
+    FULL = "full",
+    NOT_FOUND = "not-found",
+}
+
+interface RoomStatusResponse {
+    type: WebSocketResponseType.ROOM_STATUS;
+    roomId: string;
+    status: RoomStatusType;
+}
+
+interface ChallengeResponse {
+    type: WebSocketResponseType.CHALLENGE_RESPONSE;
+    target: string;
+    difficulty: number;
+}
+
+// ====== Room messages ======
+interface ParticipantJoinedMessage {
+    type: WebSocketRoomMessageType.PARTICIPANT_JOINED;
+    roomId: string;
+    participants: number;
+}
+
+interface ParticipantLeftMessage {
+    type: WebSocketRoomMessageType.PARTICIPANT_LEFT;
+    roomId: string;
+    participants: number;
 }
 
 interface RoomReadyMessage {
-    type: WebSocketMessageType.ROOM_READY;
+    type: WebSocketRoomMessageType.ROOM_READY;
     data: {
         isInitiator: boolean;
+        roomId: string;
+        participants: number;
     };
-}
-
-interface ChallengeMessage {
-    type: WebSocketMessageType.CHALLENGE;
-    challenge: string;
-    difficulty: number;
 }
 
 // ====== WebRTC signaling messages ======
 // as the server, we dont do anything with these messages other than relay them to the other peers in the room
-interface OfferMessage {
-    type: WebSocketMessageType.WEBRTC_OFFER;
+interface WebRTCOfferMessage {
+    type: WebSocketWebRtcMessageType.OFFER;
     data: {
         roomId: string;
         sdp: RTCSessionDescriptionInit;
     };
 }
 
-interface AnswerMessage {
-    type: WebSocketMessageType.WERTC_ANSWER;
+interface WebRTCAnswerMessage {
+    type: WebSocketWebRtcMessageType.ANSWER;
     data: {
         roomId: string;
         sdp: RTCSessionDescriptionInit;
     };
 }
 
-interface IceCandidateMessage {
-    type: WebSocketMessageType.WEBRTC_ICE_CANDIDATE;
+interface WebRTCIceCandidateMessage {
+    type: WebSocketWebRtcMessageType.ICE_CANDIDATE;
     data: {
         roomId: string;
         candidate: RTCIceCandidateInit;

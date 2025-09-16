@@ -2,10 +2,10 @@ import { writable, get, type Writable } from "svelte/store";
 import { WebRTCPeer } from "$lib/webrtc";
 import { WebRTCPacketType } from "$types/webrtc";
 import { room } from "$stores/roomStore";
-import { RoomConnectionState, type Room } from "$types/websocket";
+import { RoomConnectionState, WebSocketErrorType, WebSocketResponseType, WebSocketRoomMessageType, WebSocketWebRtcMessageType, type Room } from "$types/websocket";
 import { advertisedOffers, fileRequestIds, messages, receivedOffers } from "$stores/messageStore";
 import { MessageType, type Message } from "$types/message";
-import { WebSocketMessageType, type WebSocketMessage } from "$types/websocket";
+import { type WebSocketMessage } from "$types/websocket";
 import { WebBuffer } from "./buffer";
 import { goto } from "$app/navigation";
 
@@ -257,30 +257,30 @@ export async function handleMessage(event: MessageEvent) {
     const message: WebSocketMessage = JSON.parse(event.data);
 
     switch (message.type) {
-        case WebSocketMessageType.ROOM_CREATED:
+        case WebSocketResponseType.ROOM_CREATED:
             console.log("Room created:", message.data);
             room.set({ id: message.data, host: true, RTCConnectionReady: false, connectionState: RoomConnectionState.CONNECTED, participants: 1 });
             goto(`/${message.data}`);
             return;
-        case WebSocketMessageType.JOIN_ROOM:
+        case WebSocketRoomMessageType.PARTICIPANT_JOINED:
             console.log("new client joined room");
             room.update((room) => ({ ...room, participants: room.participants + 1 }));
             return;
-        case WebSocketMessageType.ROOM_JOINED:
+        case WebSocketResponseType.ROOM_JOINED:
             // TODO: if a client disconnects, we need to resync the room state
 
             room.set({ host: false, id: message.roomId, RTCConnectionReady: false, connectionState: RoomConnectionState.CONNECTED, participants: message.participants });
             console.log("Joined room");
             return;
-        case WebSocketMessageType.ROOM_LEFT:
+        case WebSocketRoomMessageType.PARTICIPANT_LEFT:
             room.update((room) => ({ ...room, participants: room.participants - 1 }));
             console.log("Participant left room");
             return;
-        case WebSocketMessageType.ERROR:
+        case WebSocketErrorType.ERROR:
             console.error("Error:", message.data);
             error.set(message.data);
             return;
-        case WebSocketMessageType.ROOM_READY:
+        case WebSocketRoomMessageType.ROOM_READY:
             let roomId = get(room).id;
 
             if (roomId === null) {
@@ -307,20 +307,20 @@ export async function handleMessage(event: MessageEvent) {
     }
 
     switch (message.type) {
-        case WebSocketMessageType.WEBRTC_OFFER:
+        case WebSocketWebRtcMessageType.OFFER:
             console.log("Received offer");
             await get(peer)?.setRemoteDescription(
                 new RTCSessionDescription(message.data.sdp),
             );
             await get(peer)?.createAnswer();
             return;
-        case WebSocketMessageType.WERTC_ANSWER:
+        case WebSocketWebRtcMessageType.ANSWER:
             console.log("Received answer");
             await get(peer)?.setRemoteDescription(
                 new RTCSessionDescription(message.data.sdp),
             );
             return;
-        case WebSocketMessageType.WEBRTC_ICE_CANDIDATE:
+        case WebSocketWebRtcMessageType.ICE_CANDIDATE:
             console.log("Received ICE candidate");
             await get(peer)?.addIceCandidate(message.data.candidate);
             return;

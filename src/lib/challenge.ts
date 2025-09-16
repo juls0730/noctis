@@ -1,22 +1,22 @@
 import { ws } from "$stores/websocketStore";
-import { WebSocketMessageType } from "$types/websocket";
+import { WebSocketRequestType, WebSocketResponseType } from "$types/websocket";
 import { solveChallenge } from "./powUtil";
 
 export async function doChallenge(additionalData: string = ""): Promise<{
-    challenge: string;
+    target: string;
     nonce: string;
 } | null> {
-    let roomChallenge: string | null = null;
+    let roomChallengeTarget: string | null = null;
 
     let challengePromise = new Promise<string | null>((resolve) => {
         let unsubscribe = ws.handleEvent(
-            WebSocketMessageType.CHALLENGE,
+            WebSocketResponseType.CHALLENGE_RESPONSE,
             async (value) => {
                 unsubscribe();
-                roomChallenge = value.challenge;
+                roomChallengeTarget = value.target;
                 resolve(
                     await solveChallenge(
-                        roomChallenge,
+                        roomChallengeTarget,
                         value.difficulty,
                         additionalData,
                     ),
@@ -26,7 +26,7 @@ export async function doChallenge(additionalData: string = ""): Promise<{
     });
 
     ws.send({
-        type: WebSocketMessageType.REQUEST_CHALLENGE,
+        type: WebSocketRequestType.CHALLENGE_REQUEST,
     });
 
     let challengeNonce = await challengePromise;
@@ -34,12 +34,12 @@ export async function doChallenge(additionalData: string = ""): Promise<{
         throw new Error("Could not solve challenge within max iterations");
     }
 
-    if (!roomChallenge) {
+    if (!roomChallengeTarget) {
         throw new Error("No room challenge");
     }
 
     return {
-        challenge: roomChallenge,
+        target: roomChallengeTarget,
         nonce: challengeNonce,
     };
 }

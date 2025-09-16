@@ -1,6 +1,6 @@
 import { get, writable, type Readable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { Socket, WebSocketMessageType, type WebSocketMessage } from '$types/websocket';
+import { Socket, type WebSocketMessage, type WebSocketMessageType } from '$types/websocket';
 import { handleMessage } from '../lib/webrtcUtil';
 
 export enum WebsocketConnectionState {

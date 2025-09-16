@@ -15,7 +15,6 @@ const config = {
 			$stores: './src/stores',
 			$components: './src/components',
 			$types: './src/types',
-			'$lib/server': './src/lib/server',
 		}
 	},
 	compilerOptions: {

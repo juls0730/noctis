@@ -1,5 +1,5 @@
 import { WebSocketServer } from "ws";
-import { Socket, WebSocketMessageType, type WebSocketMessage } from "../../types/websocket.ts";
+import { RoomStatusType, Socket, WebSocketErrorType, WebSocketRequestType, WebSocketResponseType, WebSocketRoomMessageType, WebSocketWebRtcMessageType, type WebSocketMessage } from "../../types/websocket.ts";
 import { LiveMap } from '../liveMap.ts';
 import { hashStringSHA256 } from "../powUtil.ts";
 
@@ -69,7 +69,7 @@ async function createRoom(socket: Socket, roomName?: string): Promise<string> {
 
     let room = rooms.set(roomId, new ServerRoom());
 
-    socket.send({ type: WebSocketMessageType.ROOM_CREATED, data: room.key });
+    socket.send({ type: WebSocketResponseType.ROOM_CREATED, data: room.key });
 
     try {
         await joinRoom(room.key, socket, true);
@@ -86,21 +86,21 @@ async function joinRoom(roomId: string, socket: Socket, initial?: boolean): Prom
 
     // should be unreachable
     if (!room) {
-        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
+        socket.send({ type: WebSocketErrorType.ERROR, data: errors.ROOM_NOT_FOUND });
         return undefined;
     }
 
     if (room.length == 2) {
-        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_FULL });
+        socket.send({ type: WebSocketErrorType.ERROR, data: errors.ROOM_FULL });
         return undefined;
     }
 
     // notify all clients in the room of the new client, except the client itself
-    room.notifyAll({ type: WebSocketMessageType.JOIN_ROOM, roomId });
+    room.notifyAll({ type: WebSocketRoomMessageType.PARTICIPANT_JOINED, roomId, participants: room.length });
     room.push(socket);
 
     socket.addEventListener('close', (ev) => {
-        room.notifyAll({ type: WebSocketMessageType.ROOM_LEFT, roomId });
+        room.notifyAll({ type: WebSocketRoomMessageType.PARTICIPANT_LEFT, roomId, participants: room.length });
 
         // for some reason, when you filter the array when the length is 1 it stays at 1, but we *know* that if its 1
         // then when this client disconnects, the room should be deleted since the room is empty
@@ -118,12 +118,13 @@ async function joinRoom(roomId: string, socket: Socket, initial?: boolean): Prom
         room.set(room.filter(client => client.ws !== ev.target));
     });
 
+    // sending the join message to the client who created the room is fucky
     if (!initial) {
-        socket.send({ type: WebSocketMessageType.ROOM_JOINED, roomId: roomId, participants: room.length });
+        socket.send({ type: WebSocketResponseType.ROOM_JOINED, roomId: roomId, participants: room.length });
     }
     // TODO: consider letting rooms get larger than 2 clients
     if (room.length == 2) {
-        room.forEachClient(client => client.send({ type: WebSocketMessageType.ROOM_READY, data: { isInitiator: client !== socket } }));
+        room.forEachClient(client => client.send({ type: WebSocketRoomMessageType.ROOM_READY, data: { isInitiator: client !== socket, roomId, participants: room.length } }));
     }
 
     console.log("Room created:", roomId, room.length);
@@ -148,17 +149,17 @@ function generateChallenge(): string {
     return challenge;
 }
 
-async function validateChallenge(challenge: string, nonce: string, additionalData: string = ""): Promise<boolean> {
-    if (!outstandingChallenges.has(challenge)) {
+async function validateChallenge(challenge: {target: string, nonce: string}, additionalData: string = ""): Promise<boolean> {
+    if (!outstandingChallenges.has(challenge.target)) {
         return false;
     }
 
-    let hash = await hashStringSHA256(`${additionalData}${challenge}${nonce}`);
+    let hash = await hashStringSHA256(`${additionalData}${challenge.target}${challenge.nonce}`);
     let result = hash.startsWith('0'.repeat(CHALLENGE_DIFFICULTY));
     if (result) {
         console.log("Challenge solved:", challenge);
-        clearTimeout(outstandingChallenges.get(challenge)!);
-        outstandingChallenges.delete(challenge);
+        clearTimeout(outstandingChallenges.get(challenge.target)!);
+        outstandingChallenges.delete(challenge.target);
     }
 
     return result;
@@ -170,7 +171,7 @@ function leaveRoom(roomId: string, socket: Socket): ServerRoom | undefined {
 
     // should be unreachable
     if (!room) {
-        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
+        socket.send({ type: WebSocketErrorType.ERROR, data: errors.ROOM_NOT_FOUND });
         return undefined;
     }
 
@@ -187,7 +188,7 @@ function leaveRoom(roomId: string, socket: Socket): ServerRoom | undefined {
 
     room.set(room.filter(client => client !== socket));
 
-    socket.send({ type: WebSocketMessageType.ROOM_LEFT, roomId });
+    socket.send({ type: WebSocketResponseType.ROOM_LEFT, roomId });
 
     return room;
 }
@@ -217,7 +218,7 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
             if (message === undefined) {
                 console.log("Received non-JSON message:", event);
                 // If the message is not JSON, send an error message
-                socket.send({ type: WebSocketMessageType.ERROR, data: errors.MALFORMED_MESSAGE });
+                socket.send({ type: WebSocketErrorType.ERROR, data: errors.MALFORMED_MESSAGE });
                 return;
             }
 
@@ -226,14 +227,14 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
             let room: ServerRoom | undefined = undefined;
 
             switch (message.type) {
-                case WebSocketMessageType.CREATE_ROOM:
-                    if (!message.nonce || !message.challenge) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MISSING_DATA });
+                case WebSocketRequestType.CREATE_ROOM:
+                    if (!message.challenge || !message.challenge.target || !message.challenge.nonce) {
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.MISSING_DATA });
                         return;
                     }
 
-                    if (!await validateChallenge(message.challenge, message.nonce)) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.INVALID_CHALLENGE });
+                    if (!await validateChallenge(message.challenge)) {
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.INVALID_CHALLENGE });
                         return;
                     }
 
@@ -251,23 +252,23 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
 
                         await createRoom(socket, message.roomName);
                     } catch (e: any) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: e.message });
+                        socket.send({ type: WebSocketErrorType.ERROR, data: e.message });
                         throw e;
                     }
                     break;
-                case WebSocketMessageType.JOIN_ROOM:
-                    if (!message.roomId || !message.nonce || !message.challenge) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MISSING_DATA });
+                case WebSocketRequestType.ROOM_JOIN:
+                    if (!message.roomId || !message.challenge || !message.challenge.target || !message.challenge.nonce) {
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.MISSING_DATA });
                         return;
                     }
 
-                    if (!await validateChallenge(message.challenge, message.nonce, message.roomId)) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.INVALID_CHALLENGE });
+                    if (!await validateChallenge(message.challenge, message.roomId)) {
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.INVALID_CHALLENGE });
                         return;
                     }
 
                     if (rooms.get(message.roomId) == undefined) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.ROOM_NOT_FOUND });
                         return;
                     }
 
@@ -275,14 +276,14 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                     if (!room) return;
 
                     break;
-                case WebSocketMessageType.LEAVE_ROOM:
+                case WebSocketRequestType.ROOM_LEAVE:
                     if (!message.roomId) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MALFORMED_MESSAGE });
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.MALFORMED_MESSAGE });
                         return;
                     }
 
                     if (rooms.get(message.roomId) == undefined) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.ROOM_NOT_FOUND });
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.ROOM_NOT_FOUND });
                         return;
                     }
 
@@ -290,27 +291,34 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                     if (!room) return;
 
                     break;
-                case WebSocketMessageType.CHECK_ROOM_EXISTS:
-                    if (!message.roomId || !message.nonce || !message.challenge) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.MISSING_DATA });
+                case WebSocketRequestType.ROOM_STATUS:
+                    if (!message.roomId || !message.challenge || !message.challenge.target || !message.challenge.nonce) {
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.MISSING_DATA });
                         return;
                     }
 
-                    if (!await validateChallenge(message.challenge, message.nonce, message.roomId)) {
-                        socket.send({ type: WebSocketMessageType.ERROR, data: errors.INVALID_CHALLENGE });
+                    if (!await validateChallenge(message.challenge, message.roomId)) {
+                        socket.send({ type: WebSocketErrorType.ERROR, data: errors.INVALID_CHALLENGE });
                         return;
                     }
 
-                    socket.send({ type: WebSocketMessageType.ROOM_STATUS, roomId: message.roomId, status: rooms.get(message.roomId) ? 'found' : 'not-found' });
-                    break;
-                case WebSocketMessageType.REQUEST_CHALLENGE:
-                    let challenge = generateChallenge();
+                    let roomStatus = RoomStatusType.OPEN;
+                    if (!rooms.get(message.roomId)) {
+                        roomStatus = RoomStatusType.NOT_FOUND;
+                    } else if (rooms.get(message.roomId)!.length === 2) {
+                        roomStatus = RoomStatusType.OPEN;
+                    }
 
-                    socket.send({ type: WebSocketMessageType.CHALLENGE, challenge, difficulty: CHALLENGE_DIFFICULTY });
+                    socket.send({ type: WebSocketResponseType.ROOM_STATUS, roomId: message.roomId, status: roomStatus });
                     break;
-                case WebSocketMessageType.WEBRTC_OFFER:
-                case WebSocketMessageType.WERTC_ANSWER:
-                case WebSocketMessageType.WEBRTC_ICE_CANDIDATE:
+                case WebSocketRequestType.CHALLENGE_REQUEST:
+                    let target = generateChallenge();
+
+                    socket.send({ type: WebSocketResponseType.CHALLENGE_RESPONSE, target, difficulty: CHALLENGE_DIFFICULTY });
+                    break;
+                case WebSocketWebRtcMessageType.OFFER:
+                case WebSocketWebRtcMessageType.ANSWER:
+                case WebSocketWebRtcMessageType.ICE_CANDIDATE:
                     // relay these messages to the other peers in the room
                     room = rooms.get(message.data.roomId);
 
@@ -324,7 +332,7 @@ export function confgiureWebsocketServer(wss: WebSocketServer) {
                     break;
                 default:
                     console.warn(`Unknown message type: ${message.type}`);
-                    socket.send({ type: WebSocketMessageType.ERROR, data: errors.UNKNOWN_MESSAGE_TYPE });
+                    socket.send({ type: WebSocketErrorType.ERROR, data: errors.UNKNOWN_MESSAGE_TYPE });
                     break;
             }
         });
