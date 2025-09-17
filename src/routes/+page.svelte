@@ -23,7 +23,7 @@
                 challenge: {
                     target: challengeResult.target,
                     nonce: challengeResult.nonce,
-                }
+                },
             });
 
             console.log("Created room:", roomId);
@@ -49,11 +49,11 @@
                     class="py-4 px-8 text-xl font-semibold bg-accent text-[#121826] disabled:opacity-50 disabled:cursor-not-allowed rounded-lg cursor-pointer transition-[background-color,_translate,_box-shadow] ease-out duration-200 w-full inline-flex justify-center items-center gap-2.5 hover:bg-[#00f0c8] hover:-translate-y-1 hover:shadow-md shadow-accent/20">
                     {#if $ws.status !== WebsocketConnectionState.CONNECTED}
                         <span class="flex items-center">
-                            <LoadingSpinner /> Connecting to server...
+                            <span class="mr-3"><LoadingSpinner /></span> Connecting to server...
                         </span>
                     {:else if $roomLoading}
                         <span class="flex items-center">
-                            <LoadingSpinner /> Creating Room...
+                            <span class="mr-3"><LoadingSpinner /></span> Creating Room...
                         </span>
                     {:else}
                         <svg
@@ -80,6 +80,7 @@
                         Enter a custom room name
                     </label>
                     <input
+                        tabindex={!$showRoomNameInput ? -1 : 0}
                         type="text"
                         id="roomNameInput"
                         bind:value={$roomName}
@@ -223,7 +224,7 @@
     </div>
 </section>
 
-<footer class="px-20 pt-3 text-center border-t border-[#21293b]">
+<footer class="px-20 pt-3 pb-1 text-center border-t border-[#21293b]">
     <div class="max-w-6xl px-10 mx-auto">
         <p>
             &copy; {new Date().getFullYear()} Noctis - MIT License

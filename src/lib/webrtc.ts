@@ -5,12 +5,55 @@ import { browser } from '$app/environment';
 import { createApplicationMessage, createCommit, createGroup, decodeMlsMessage, defaultCapabilities, defaultLifetime, emptyPskIndex, encodeMlsMessage, generateKeyPackage, getCiphersuiteFromName, getCiphersuiteImpl, joinGroup, processPrivateMessage, type CiphersuiteImpl, type ClientState, type Credential, type KeyPackage, type PrivateKeyPackage, type Proposal } from 'ts-mls';
 import { WebSocketWebRtcMessageType } from '$types/websocket';
 
+export enum WebRTCCallbackType {
+    CONNECTED,
+    MESSAGE,
+    DATA_CHANNEL_STATE_CHANGE,
+    KEY_EXCHANGE_DONE,
+    NEGOTIATION_NEEDED,
+    ERROR,
+}
+
+type WebRTCCallback = WebRTCConnectedCallback | WebRTCMessageCallback | WebRTCDataChannelStateChangeCallback | WebRTCKeyExchangeDoneCallback | WebRTCNegotiationNeededCallback | WebRTCErrorCallback;
+type GetCallbackFunction<T extends WebRTCCallbackType> =
+    (WebRTCCallback & { type: T })['cb'];
+
+interface WebRTCConnectedCallback {
+    type: WebRTCCallbackType.CONNECTED;
+    cb: () => void;
+}
+
+interface WebRTCMessageCallback {
+    type: WebRTCCallbackType.MESSAGE;
+    cb: (message: { type: WebRTCPacketType, data: ArrayBuffer }, webRtcPeer: WebRTCPeer) => void;
+}
+
+interface WebRTCDataChannelStateChangeCallback {
+    type: WebRTCCallbackType.DATA_CHANNEL_STATE_CHANGE;
+    cb: (state: boolean) => void;
+}
+
+interface WebRTCKeyExchangeDoneCallback {
+    type: WebRTCCallbackType.KEY_EXCHANGE_DONE;
+    cb: () => void;
+}
+
+interface WebRTCNegotiationNeededCallback {
+    type: WebRTCCallbackType.NEGOTIATION_NEEDED;
+    cb: () => void;
+}
+
+interface WebRTCErrorCallback {
+    type: WebRTCCallbackType.ERROR;
+    cb: (error: any) => void;
+}
+
 export class WebRTCPeer {
     private peer: RTCPeerConnection | null = null;
     private dataChannel: RTCDataChannel | null = null;
     private isInitiator: boolean;
     private roomId: string;
-    private callbacks: WebRTCPeerCallbacks;
+    private callbacks: Map<WebRTCCallbackType, WebRTCCallback['cb'][]> = new Map();
     private credential: Credential;
     private clientState: ClientState | undefined;
     private cipherSuite: CiphersuiteImpl | undefined;
@@ -27,10 +70,44 @@ export class WebRTCPeer {
     constructor(roomId: string, isInitiator: boolean, callbacks: WebRTCPeerCallbacks) {
         this.roomId = roomId;
         this.isInitiator = isInitiator;
-        this.callbacks = callbacks;
+        this.callbacks = new Map();
+
+        this.addCallback(WebRTCCallbackType.CONNECTED, callbacks.onConnected);
+        this.addCallback(WebRTCCallbackType.MESSAGE, callbacks.onMessage);
+        this.addCallback(WebRTCCallbackType.DATA_CHANNEL_STATE_CHANGE, callbacks.onDataChannelStateChange);
+        this.addCallback(WebRTCCallbackType.KEY_EXCHANGE_DONE, callbacks.onKeyExchangeDone);
+        this.addCallback(WebRTCCallbackType.NEGOTIATION_NEEDED, callbacks.onNegotiationNeeded);
 
         const id = crypto.getRandomValues(new Uint8Array(32));
         this.credential = { credentialType: "basic", identity: id };
+    }
+
+    // returns unsubscribe function
+    public addCallback<T extends WebRTCCallbackType>(type: T, func: GetCallbackFunction<T>): () => void {
+        if (this.callbacks.has(type)) {
+            this.callbacks.get(type)!.push(func);
+            return () => {
+                this.callbacks.get(type)!.splice(this.callbacks.get(type)!.indexOf(func), 1);
+            }
+        }
+
+        this.callbacks.set(type, [func]);
+        return () => {
+            this.callbacks.get(type)!.splice(this.callbacks.get(type)!.indexOf(func), 1);
+        }
+    }
+
+    private emitCallback<T extends WebRTCCallbackType>(type: T, ...args: Parameters<GetCallbackFunction<T>>) {
+        console.log("Emitting callback:", type, args, WebRTCCallbackType[type]);
+        console.log("Callbacks:", this.callbacks);
+        if (this.callbacks.has(type)) {
+            console.log("Emitting callback:", type, args, WebRTCCallbackType[type]);
+
+            for (let func of this.callbacks.get(type)!) {
+                // @ts-ignore
+                func.apply(this, args);
+            }
+        }
     }
 
     private sendIceCandidate(candidate: RTCIceCandidate) {
@@ -68,14 +145,14 @@ export class WebRTCPeer {
         this.peer.oniceconnectionstatechange = () => {
             console.log('ICE connection state changed to:', this.peer?.iceConnectionState);
             if (this.peer?.iceConnectionState === 'connected' || this.peer?.iceConnectionState === 'completed') {
-                this.callbacks.onConnected();
+                this.emitCallback(WebRTCCallbackType.CONNECTED);
             } else if (this.peer?.iceConnectionState === 'failed') {
-                this.callbacks.onError('ICE connection failed');
+                this.emitCallback(WebRTCCallbackType.ERROR, 'ICE connection failed');
             }
         };
 
         this.peer.onnegotiationneeded = () => {
-            this.callbacks.onNegotiationNeeded();
+            this.emitCallback(WebRTCCallbackType.NEGOTIATION_NEEDED);
         };
 
         // 2. Create data channel
@@ -96,7 +173,7 @@ export class WebRTCPeer {
         channel.binaryType = "arraybuffer";
 
         channel.onopen = async () => {
-            this.callbacks.onDataChannelStateChange(true);
+            this.emitCallback(WebRTCCallbackType.DATA_CHANNEL_STATE_CHANGE, true);
 
             try {
                 if (this.isInitiator) {
@@ -114,7 +191,7 @@ export class WebRTCPeer {
                 }
             } catch (e) {
                 console.error("Error starting key exchange:", e);
-                this.callbacks.onError(e);
+                this.emitCallback(WebRTCCallbackType.ERROR, e);
             }
         };
 
@@ -134,7 +211,7 @@ export class WebRTCPeer {
                 return;
             }
 
-            console.log("parsed data", data, encrypted, type);
+            console.log("parsed data", data, encrypted, WebRTCPacketType[type]);
 
             if (type === WebRTCPacketType.GROUP_OPEN) {
                 await this.generateKeyPair();
@@ -181,7 +258,7 @@ export class WebRTCPeer {
 
                 this.send(encodedWelcomeBuf, WebRTCPacketType.WELCOME);
                 this.encyptionReady = true;
-                this.callbacks.onKeyExchangeDone();
+                this.emitCallback(WebRTCCallbackType.KEY_EXCHANGE_DONE);
 
                 return;
             }
@@ -205,7 +282,7 @@ export class WebRTCPeer {
 
                 console.log("Joined group", this.clientState);
                 this.encyptionReady = true;
-                this.callbacks.onKeyExchangeDone();
+                this.emitCallback(WebRTCCallbackType.KEY_EXCHANGE_DONE);
                 return;
             }
 
@@ -235,17 +312,17 @@ export class WebRTCPeer {
                 data: data.buffer,
             };
 
-            this.callbacks.onMessage(message, this);
+            this.emitCallback(WebRTCCallbackType.MESSAGE, message, this);
         };
 
         channel.onclose = () => {
-            this.callbacks.onDataChannelStateChange(false);
+            this.emitCallback(WebRTCCallbackType.DATA_CHANNEL_STATE_CHANGE, false);
 
         };
 
         channel.onerror = (error) => {
             console.error('data channel error:', error);
-            this.callbacks.onError(error);
+            this.emitCallback(WebRTCCallbackType.ERROR, error);
         };
     }
 
@@ -281,7 +358,7 @@ export class WebRTCPeer {
             await this.peer.setRemoteDescription(sdp);
         } catch (error) {
             console.error('Error setting remote description:', error);
-            this.callbacks.onError(error);
+            this.emitCallback(WebRTCCallbackType.ERROR, error);
         }
     }
 
@@ -304,7 +381,7 @@ export class WebRTCPeer {
 
         } catch (error) {
             console.error('Error creating answer:', error);
-            this.callbacks.onError(error);
+            this.emitCallback(WebRTCCallbackType.ERROR, error);
         }
     }
 
@@ -315,7 +392,7 @@ export class WebRTCPeer {
             await this.peer.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (error) {
             console.error('Error adding ICE candidate:', error);
-            this.callbacks.onError(error);
+            this.emitCallback(WebRTCCallbackType.ERROR, error);
         }
     }
 
@@ -333,7 +410,7 @@ export class WebRTCPeer {
             this.keyPackage = await generateKeyPackage(this.credential, defaultCapabilities(), defaultLifetime, [], this.cipherSuite);
         } catch (e) {
             console.error("Error generating key package:", e);
-            this.callbacks.onError(e);
+            this.emitCallback(WebRTCCallbackType.ERROR, e);
         }
     }
 

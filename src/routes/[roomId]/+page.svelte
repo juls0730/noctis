@@ -1,15 +1,16 @@
 <script lang="ts">
-    import { onMount } from "svelte";
+    import { onDestroy, onMount } from "svelte";
     import { room } from "$stores/roomStore";
     import { WebsocketConnectionState, ws } from "$stores/websocketStore";
     import { RoomStatusType, WebSocketRequestType, WebSocketResponseType } from "$types/websocket";
-    import { dataChannelReady, error } from "$lib/webrtcUtil";
+    import { error, peer } from "$lib/webrtcUtil";
     import { goto } from "$app/navigation";
     import RtcMessage from "$components/RTCMessage.svelte";
     import { page } from "$app/state";
     import LoadingSpinner from "$components/LoadingSpinner.svelte";
     import { hashStringSHA256, solveChallenge } from "$lib/powUtil";
     import { doChallenge } from "$lib/challenge";
+    import { messages } from "$stores/messageStore";
     const { roomId } = page.params;
 
     let isHost = $derived($room.host === true);
@@ -23,6 +24,11 @@
         error.set(null);
 
         roomLink = `${window.location.origin}/${roomId}`;
+    });
+
+    onDestroy(() => {
+        messages.set([]);
+        $peer?.close();
     });
 
     function handleCopyLink() {
@@ -52,7 +58,7 @@
             challenge: {
                 target: challengeResult.target,
                 nonce: challengeResult.nonce,
-            }
+            },
         });
     }
 
@@ -61,13 +67,6 @@
         alert("You have declined to join the room.");
         awaitingJoinConfirmation = false; // Hides the prompt
         goto("/");
-    }
-
-    function handleLeave() {
-        if (confirm("Are you sure you want to leave? The chat history will be deleted.")) {
-            // In a real app, this would disconnect the P2P session and redirect.
-            window.location.href = "/";
-        }
     }
 
     ws.subscribe(async (newWs) => {
@@ -99,7 +98,7 @@
                     challenge: {
                         target: challengeResult.target,
                         nonce: challengeResult.nonce,
-                    }
+                    },
                 });
             }
         }
@@ -113,7 +112,7 @@
         </h2>
         <p class="!text-paragraph">
             click <a href="/">here</a>
-             to go back to the homepage
+            to go back to the homepage
         </p>
     {/if}
 
@@ -144,18 +143,18 @@
             {#if $ws.status !== WebsocketConnectionState.CONNECTED || roomExists === undefined}
                 <h2 class="text-3xl font-bold text-white mb-2">
                     <span class="flex items-center">
-                        <LoadingSpinner size="24" /> Connecting to server...
+                        <span class="mr-3"><LoadingSpinner size="24" /></span> Connecting to server...
                     </span>
                 </h2>
                 <p class="!text-paragraph">
                     click <a href="/">here</a>
-                     to go back to the homepage
+                    to go back to the homepage
                 </p>
             {:else if roomExists === false}
                 <h2 class="text-3xl font-bold text-white mb-2">That room does not exist.</h2>
                 <p class="!text-paragraph">
                     click <a href="/">here</a>
-                     to go back to the homepage
+                    to go back to the homepage
                 </p>
             {:else}
                 <h2 class="text-3xl font-bold text-white mb-2">You're invited to chat.</h2>
@@ -172,6 +171,12 @@
                     </button>
                 </div>
             {/if}
+        {:else if !$room.RTCConnectionReady}
+            <h2 class="text-3xl font-bold text-white mb-2">
+                <span class="flex items-center">
+                    <span class="mr-3"><LoadingSpinner size="24" /></span> Connecting to room...
+                </span>
+            </h2>
         {:else}
             <RtcMessage {room} />
         {/if}

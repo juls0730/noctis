@@ -150,20 +150,25 @@ export class WebBuffer {
         this.dataView.setBigInt64(offset, value, true);
     }
 
-    // if no length is specified, reads until the end of the buffer
-    readString(length?: number, offset?: number): string {
-        if (length === undefined) {
-            length = this.length - this.count;
-        }
-
+    readString(offset?: number): string {
         if (offset === undefined) {
             offset = this.count;
-            this.count += length;
         }
 
+        let stringBytes = [];
+        let stringLength = 0;
+        // loop until we find a null byte
+        while (this.data.length >= offset + stringLength && this.data[offset + stringLength] !== 0) {
+            stringBytes.push(this.data[offset + stringLength]);
+            stringLength++;
+        }
+
+        this.count += stringLength + 1;
+
+        console.log("Read string:", stringBytes, stringLength);
+
         let textDeccoder = new TextDecoder();
-        let readTextBuf = this.data.slice(offset, offset + length);
-        let value = textDeccoder.decode(readTextBuf);
+        let value = textDeccoder.decode(new Uint8Array(stringBytes));
 
         return value;
     }
@@ -171,11 +176,16 @@ export class WebBuffer {
     writeString(value: string, offset?: number) {
         if (offset === undefined) {
             offset = this.count;
-            this.count += value.length;
+            this.count += value.length + 1;
         }
+
+        // use C-style string termination
+        value = value + "\0";
 
         let textEncoder = new TextEncoder();
         let textBuf = textEncoder.encode(value);
+
+        console.log("Writing string:", value, textBuf);
 
         this.data.set(textBuf, offset);
     }

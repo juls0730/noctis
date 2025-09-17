@@ -38,12 +38,13 @@ export interface FileOfferMessage extends BaseMessage {
         // 64 bit file size. chunked at 1024 bytes
         fileSize: bigint;
 
-        // 16 bit file name size
-        fileNameSize: number;
         fileName: string;
+        fileType: string;
+
         // 64bit randomly generated id to identify the file so that multiple files with the same name can be uploaded
         id: bigint;
         text: string | null;
+        downloading?: 'preview' | 'downloading' | 'downloaded';
     };
 }
 

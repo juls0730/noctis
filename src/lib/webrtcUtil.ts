@@ -3,11 +3,12 @@ import { WebRTCPeer } from "$lib/webrtc";
 import { WebRTCPacketType } from "$types/webrtc";
 import { room } from "$stores/roomStore";
 import { RoomConnectionState, WebSocketErrorType, WebSocketResponseType, WebSocketRoomMessageType, WebSocketWebRtcMessageType, type Room } from "$types/websocket";
-import { advertisedOffers, fileRequestIds, messages, receivedOffers } from "$stores/messageStore";
+import { advertisedOffers, downloadedImageFiles, fileRequestIds, incompleteAutoDownloadedFiles, messages, receivedOffers } from "$stores/messageStore";
 import { MessageType, type Message } from "$types/message";
 import { type WebSocketMessage } from "$types/websocket";
 import { WebBuffer } from "./buffer";
 import { goto } from "$app/navigation";
+import { settingsStore } from "$stores/settingsStore";
 
 export const error: Writable<string | null> = writable(null);
 export let peer: Writable<WebRTCPeer | null> = writable(null);
@@ -46,7 +47,6 @@ const callbacks = {
         console.log("Connected to peer");
         isRTCConnected.set(true);
     },
-    //! TODO: come up with a more complex room system. This is largely for testing purposes
     onMessage: async (message: { type: WebRTCPacketType, data: ArrayBuffer }, webRtcPeer: WebRTCPeer) => {
         console.log("WebRTC Received message:", message);
         if (message.type !== WebRTCPacketType.MESSAGE) {
@@ -74,23 +74,41 @@ const callbacks = {
                 break;
             case MessageType.FILE_OFFER:
                 let fileSize = messageData.readBigInt64LE();
-                let fileNameSize = messageData.readInt16LE();
-                let fileName = messageData.readString(fileNameSize);
+                let fileName = messageData.readString();
+                let fileType = messageData.readString();
                 let id = messageData.readBigInt64LE();
 
-                get(receivedOffers).set(id, { name: fileName, size: fileSize });
+                get(receivedOffers).set(id, { name: fileName, size: fileSize, type: fileType });
 
                 messages.set([...get(messages), {
                     initiator: false,
                     type: messageType,
                     data: {
                         fileSize,
-                        fileNameSize,
                         fileName,
+                        fileType,
                         id,
                         text: messageData.peek() ? messageData.readString() : null,
                     }
                 }]);
+
+                if (get(settingsStore).autoDownloadImages && get(settingsStore).maxAutoDownloadSize >= fileSize && fileType.startsWith("image/")) {
+                    console.log("Auto downloading image");
+
+                    let fileRequestBuf = new WebBuffer(new ArrayBuffer(1 + 8 + 8));
+                    let requesterId = new WebBuffer(
+                        crypto.getRandomValues(new Uint8Array(8)).buffer,
+                    ).readBigInt64LE();
+
+                    fileRequestBuf.writeInt8(MessageType.FILE_REQUEST);
+                    fileRequestBuf.writeBigInt64LE(id);
+                    fileRequestBuf.writeBigInt64LE(requesterId);
+
+                    get(fileRequestIds).set(requesterId, { saveToDisk: false, offerId: id });
+
+                    webRtcPeer.send(fileRequestBuf.buffer, WebRTCPacketType.MESSAGE);
+                }
+
                 break;
             case MessageType.FILE_REQUEST:
                 // the id that coresponds to our file offer
@@ -171,28 +189,45 @@ const callbacks = {
                 break;
             case MessageType.FILE:
                 let requestId = messageData.readBigInt64LE();
-                let receivedOffserId = get(fileRequestIds).get(requestId);
-                if (!receivedOffserId) {
+                let receivedOffer = get(fileRequestIds).get(requestId);
+                if (!receivedOffer) {
                     console.error("Received file message for unknown file id:", requestId);
                     return;
                 }
 
-                let file = get(receivedOffers).get(receivedOffserId);
+                let file = get(receivedOffers).get(receivedOffer.offerId);
                 if (!file) {
                     console.error("Unknown file id:", requestId);
                     return;
                 }
 
-                if (downloadStream === undefined) {
-                    window.addEventListener("pagehide", onPageHide);
-                    window.addEventListener("beforeunload", beforeUnload);
+                let fileData = new Uint8Array(messageData.read());
 
-                    // @ts-ignore
-                    downloadStream = window.streamSaver.createWriteStream(file.name, { size: Number(file.size) });
-                    downloadWriter = downloadStream!.getWriter();
+                console.log("recieved chunk of auto downloaded file");
+                if (get(receivedOffers).get(receivedOffer.offerId)!.type.startsWith("image/")) {
+                    if (!incompleteAutoDownloadedFiles.has(receivedOffer.offerId)) {
+                        incompleteAutoDownloadedFiles.set(receivedOffer.offerId, new Blob([fileData.buffer]));
+                        console.log("Auto downloaded file:", incompleteAutoDownloadedFiles.get(receivedOffer.offerId)!);
+                    } else {
+                        // stupidest way ever to extend a buffer
+                        let blobParts = incompleteAutoDownloadedFiles.get(receivedOffer.offerId)!;
+                        incompleteAutoDownloadedFiles.set(receivedOffer.offerId, new Blob([blobParts, fileData.buffer]));
+                        // console.log("Auto downloaded file:", get(autoDownloadedFiles.get(receivedOffser.offerId)!));
+                    }
                 }
 
-                await downloadWriter!.write(new Uint8Array(messageData.read()));
+                if (receivedOffer.saveToDisk) {
+                    if (downloadStream === undefined) {
+                        window.addEventListener("pagehide", onPageHide);
+                        window.addEventListener("beforeunload", beforeUnload);
+
+                        // @ts-ignore
+                        downloadStream = window.streamSaver.createWriteStream(file.name, { size: Number(file.size) });
+                        downloadWriter = downloadStream!.getWriter();
+                    }
+
+                    await downloadWriter!.write(new Uint8Array(fileData));
+                }
 
                 let fileAckBuf = new WebBuffer(new ArrayBuffer(1 + 8));
                 fileAckBuf.writeInt8(MessageType.FILE_ACK);
@@ -206,6 +241,18 @@ const callbacks = {
                 if (!get(fileRequestIds).has(fileDoneId)) {
                     console.error("Unknown file done id:", fileDoneId);
                     return;
+                }
+
+                let doneOfferId = get(fileRequestIds).get(fileDoneId)!.offerId;
+                if (!get(receivedOffers).has(doneOfferId)) {
+                    console.error("Unknown file done id:", fileDoneId);
+                    return;
+                }
+
+                if (incompleteAutoDownloadedFiles.has(doneOfferId)) {
+                    console.log("completely auto downloaded file:", incompleteAutoDownloadedFiles.get(doneOfferId)!);
+                    downloadedImageFiles.set(get(downloadedImageFiles).set(doneOfferId, incompleteAutoDownloadedFiles.get(doneOfferId)!));
+                    incompleteAutoDownloadedFiles.delete(doneOfferId);
                 }
 
                 window.removeEventListener("pagehide", onPageHide);
@@ -264,7 +311,7 @@ export async function handleMessage(event: MessageEvent) {
             return;
         case WebSocketRoomMessageType.PARTICIPANT_JOINED:
             console.log("new client joined room");
-            room.update((room) => ({ ...room, participants: room.participants + 1 }));
+            room.update((room) => ({ ...room, participants: message.participants }));
             return;
         case WebSocketResponseType.ROOM_JOINED:
             // TODO: if a client disconnects, we need to resync the room state
@@ -273,7 +320,7 @@ export async function handleMessage(event: MessageEvent) {
             console.log("Joined room");
             return;
         case WebSocketRoomMessageType.PARTICIPANT_LEFT:
-            room.update((room) => ({ ...room, participants: room.participants - 1 }));
+            room.update((room) => ({ ...room, participants: message.participants }));
             console.log("Participant left room");
             return;
         case WebSocketErrorType.ERROR:
@@ -288,7 +335,7 @@ export async function handleMessage(event: MessageEvent) {
                 return;
             }
 
-            room.update(r => ({ ...r, RTCConnectionReady: true }));
+            room.update(r => ({ ...r, RTCConnectionReady: true, participants: message.data.participants }));
 
             console.log("Creating peer");
             peer.set(new WebRTCPeer(
